@@ -1,0 +1,113 @@
+/* Recipta Design System — CSS Custom Properties */
+
+:root {
+  /* ─── Color Palette ─── */
+  /* Background layers (darkest to lightest) */
+  --color-bg-primary: #1e1e1e;
+  --color-bg-secondary: #252525;
+  --color-bg-tertiary: #2c2c2c;
+  --color-bg-elevated: #323232;
+  --color-bg-hover: #3b3b3b;
+  --color-bg-active: #454545;
+
+  /* Surface colors for panels and cards */
+  --color-surface: #292929;
+  --color-surface-light: #333333;
+  --color-surface-border: #454545;
+
+  /* Purple accent (primary brand color) */
+  --color-accent: #347eae;
+  --color-accent-light: #6fa5c8;
+  --color-accent-dark: #28678f;
+  --color-accent-hover: #3f8bbd;
+  --color-accent-subtle: rgba(52, 126, 174, 0.12);
+  --color-accent-glow: rgba(52, 126, 174, 0.18);
+
+  /* Text */
+  --color-text-primary: #f1f1f1;
+  --color-text-secondary: #c3c3c3;
+  --color-text-tertiary: #929292;
+  --color-text-disabled: #626262;
+  --color-text-inverse: #0F0F14;
+
+  /* Semantic colors */
+  --color-success: #22C55E;
+  --color-success-subtle: rgba(34, 197, 94, 0.12);
+  --color-warning: #F59E0B;
+  --color-warning-subtle: rgba(245, 158, 11, 0.12);
+  --color-error: #EF4444;
+  --color-error-subtle: rgba(239, 68, 68, 0.12);
+  --color-info: #3B82F6;
+  --color-info-subtle: rgba(59, 130, 246, 0.12);
+
+  /* ─── Typography ─── */
+  --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+  --text-xs: 0.6875rem;     /* 11px */
+  --text-sm: 0.75rem;       /* 12px */
+  --text-base: 0.8125rem;   /* 13px */
+  --text-md: 0.875rem;      /* 14px */
+  --text-lg: 1rem;          /* 16px */
+  --text-xl: 1.25rem;       /* 20px */
+  --text-2xl: 1.5rem;       /* 24px */
+  --text-3xl: 2rem;         /* 32px */
+
+  --font-light: 300;
+  --font-regular: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* ─── Spacing ─── */
+  --space-0: 0;
+  --space-1: 0.25rem;    /* 4px */
+  --space-2: 0.5rem;     /* 8px */
+  --space-3: 0.75rem;    /* 12px */
+  --space-4: 1rem;       /* 16px */
+  --space-5: 1.25rem;    /* 20px */
+  --space-6: 1.5rem;     /* 24px */
+  --space-8: 2rem;       /* 32px */
+  --space-10: 2.5rem;    /* 40px */
+  --space-12: 3rem;      /* 48px */
+  --space-16: 4rem;      /* 64px */
+
+  /* ─── Border Radius ─── */
+  --radius-sm: 4px;
+  --radius-md: 4px;
+  --radius-lg: 5px;
+  --radius-xl: 7px;
+  --radius-2xl: 9px;
+  --radius-full: 9999px;
+
+  /* ─── Shadows ─── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.35);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 8px 24px rgba(20, 115, 230, 0.2);
+
+  /* ─── Transitions ─── */
+  --transition-fast: 120ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 350ms ease;
+
+  /* ─── Layout ─── */
+  --toolbar-height: 44px;
+  --sidebar-width: 276px;
+  --panel-width: 330px;
+  --statusbar-height: 28px;
+  --panel-padding: var(--space-3);
+
+  /* ─── Z-index scale ─── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+}

@@ -6,6 +6,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
@@ -17,16 +18,28 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "Recipta",
-		Width:  1024,
-		Height: 768,
+		Title:     "Recipta — Print Layout & Numbering Tool",
+		Width:     1440,
+		Height:    900,
+		MinWidth:  1200,
+		MinHeight: 700,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
+		BackgroundColour: &options.RGBA{R: 18, G: 18, B: 24, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
+			app.ProjectHandler,
+			app.NumberingHandler,
+			app.SheetHandler,
+		},
+		// Windows-specific options for professional desktop appearance
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+			Theme:                windows.Dark,
 		},
 	})
 
