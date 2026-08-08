@@ -27,6 +27,7 @@ interface EditorHistorySnapshot {
 }
 
 const PATTERN_COLORS = ['#62a7d2', '#d18a5b', '#79ad78', '#b285c5', '#c7ae61', '#cf7474', '#6fb8ad', '#9b9bd0'];
+const assetPreviewCache = new Map<string, string>();
 
 function getNumberBoxCenter(item: NumberItem) {
   const angle = ((item.rotation || 0) * Math.PI) / 180;
@@ -131,6 +132,9 @@ export function Editor() {
   const pendingNumberDragPoint = useRef<{ x: number; y: number } | null>(null);
   const undoStack = useRef<EditorHistorySnapshot[]>([]);
   const redoStack = useRef<EditorHistorySnapshot[]>([]);
+  const shortcutHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  const settingsSaveTimer = useRef<number | null>(null);
+  const manualNumbersSaveTimer = useRef<number | null>(null);
 
   // Grid, snapping, and preview controls are editor-only aids.
   const [showGrid, setShowGrid] = useState(false);
@@ -205,7 +209,23 @@ export function Editor() {
     restoreHistorySnapshot(next);
   };
 
+  // Install keyboard listeners exactly once. The ref is updated with the
+  // latest editor state below, avoiding listener churn during dragging.
   React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => shortcutHandlerRef.current(event);
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') setSpacePressed(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
     async function loadAssetSource() {
       if (!activeProject || !currentAsset) {
         setCanvasSrc('');
@@ -216,6 +236,12 @@ export function Editor() {
       try {
         setIsLoading(true);
         setCanvasSize(null);
+        const cacheKey = `${activeProject.id}:${currentAsset.id}:${currentAsset.storedPath}`;
+        const cachedPreview = assetPreviewCache.get(cacheKey);
+        if (cachedPreview) {
+          if (!cancelled) setCanvasSrc(cachedPreview);
+          return;
+        }
         // Browser imports are already data URLs; desktop imports are loaded
         // securely from the Go backend.
         const dataUrl = currentAsset.storedPath.startsWith('data:')
@@ -239,50 +265,24 @@ export function Editor() {
           const blob = await response.blob();
           const file = new File([blob], currentAsset.originalFilename, { type: 'application/pdf' });
           const rasterizedUrl = await api.convertPdfToImageDataUrl(file);
-          setCanvasSrc(rasterizedUrl);
+          assetPreviewCache.set(cacheKey, rasterizedUrl);
+          if (!cancelled) setCanvasSrc(rasterizedUrl);
         } else {
-          setCanvasSrc(dataUrl);
+          assetPreviewCache.set(cacheKey, dataUrl);
+          if (!cancelled) setCanvasSrc(dataUrl);
         }
       } catch (err) {
+        if (cancelled) return;
         console.error('Failed to load asset preview:', err);
         setCanvasSrc('');
         setError(`Failed to render ${currentAsset.fileType.toUpperCase()} preview: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
     loadAssetSource();
+    return () => { cancelled = true; };
   }, [currentAsset, activeProject]);
-
-  React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isTextField = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-      const modifier = event.ctrlKey || event.metaKey;
-      if (modifier && !isTextField && event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        if (event.shiftKey) redoEditorChange(); else undoEditorChange();
-        return;
-      }
-      if (modifier && !isTextField && event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        redoEditorChange();
-        return;
-      }
-      if (event.code === 'Space' && !isTextField) {
-        event.preventDefault();
-        setSpacePressed(true);
-      }
-    };
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.code === 'Space') setSpacePressed(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [numberItems, layerGroups, patternGroups, patternDefinitions, numberArrangement]);
 
   React.useLayoutEffect(() => {
     const area = canvasAreaRef.current;
@@ -305,6 +305,8 @@ export function Editor() {
   React.useEffect(() => () => {
     if (connectionDragFrame.current !== null) cancelAnimationFrame(connectionDragFrame.current);
     if (numberDragFrame.current !== null) cancelAnimationFrame(numberDragFrame.current);
+    if (settingsSaveTimer.current !== null) window.clearTimeout(settingsSaveTimer.current);
+    if (manualNumbersSaveTimer.current !== null) window.clearTimeout(manualNumbersSaveTimer.current);
   }, []);
 
   if (!activeProject) {
@@ -815,12 +817,15 @@ export function Editor() {
     setNumberItems((items) => items.map((item) => ids.includes(item.id) ? { ...item, x: Math.max(0, item.x + dx), y: Math.max(0, item.y + dy) } : item));
   };
 
-  React.useEffect(() => {
-    const handleEditorShortcut = (event: KeyboardEvent) => {
+  shortcutHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target;
-      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return;
+      const isTextField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
+      if (modifier && !isTextField && key === 'z') { event.preventDefault(); if (event.shiftKey) redoEditorChange(); else undoEditorChange(); return; }
+      if (modifier && !isTextField && key === 'y') { event.preventDefault(); redoEditorChange(); return; }
+      if (event.code === 'Space' && !isTextField) { event.preventDefault(); setSpacePressed(true); return; }
+      if (isTextField) return;
       if (key === '?' || (event.shiftKey && event.key === '/')) { event.preventDefault(); setShowShortcutsDialog(true); return; }
       if (event.key === 'Escape') { setShowShortcutsDialog(false); setShowExportDialog(false); setSelectedLayerIds([]); setSelectedPatternPositionIds([]); setSelectedConnection(null); return; }
       if (modifier && key === 'd') { event.preventDefault(); duplicateSelectedNumber(); return; }
@@ -836,10 +841,7 @@ export function Editor() {
       else if (event.key === 'ArrowRight') { event.preventDefault(); nudgeSelectedNumbers(distance, 0); }
       else if (event.key === 'ArrowUp') { event.preventDefault(); nudgeSelectedNumbers(0, -distance); }
       else if (event.key === 'ArrowDown') { event.preventDefault(); nudgeSelectedNumbers(0, distance); }
-    };
-    window.addEventListener('keydown', handleEditorShortcut);
-    return () => window.removeEventListener('keydown', handleEditorShortcut);
-  }, [numberItems, selectedIndex, selectedLayerIds, patternGroups, activeGroupId, previewZoom, canvasSrc, layerGroups]);
+  };
 
   const exportNumbers = (() => {
     if (numberSettings?.mode === 'manual') return manualNumbers.map((item) => item.numberValue).filter(Boolean);
@@ -1645,7 +1647,10 @@ export function Editor() {
             onSettingsChange={(newSettings) => {
               if (numberSettings && numberSettings.mode === newSettings.mode && numberSettings.startNumber === newSettings.startNumber && numberSettings.endNumber === newSettings.endNumber && numberSettings.step === newSettings.step && numberSettings.padding === newSettings.padding && numberSettings.prefix === newSettings.prefix && numberSettings.suffix === newSettings.suffix) return;
               setNumberSettings(newSettings);
-              api.saveNumberSettings(newSettings);
+              if (settingsSaveTimer.current !== null) window.clearTimeout(settingsSaveTimer.current);
+              settingsSaveTimer.current = window.setTimeout(() => {
+                api.saveNumberSettings(newSettings).catch((err) => console.error('Failed to save number settings:', err));
+              }, 250);
             }}
             onManualNumbersChange={(newManualList) => {
               const items: ManualNumber[] = newManualList.map((val, idx) => ({
@@ -1656,7 +1661,10 @@ export function Editor() {
                 isValid: true,
               }));
               setManualNumbers(items);
-              api.saveManualNumbers(activeProject.id, newManualList);
+              if (manualNumbersSaveTimer.current !== null) window.clearTimeout(manualNumbersSaveTimer.current);
+              manualNumbersSaveTimer.current = window.setTimeout(() => {
+                api.saveManualNumbers(activeProject.id, newManualList).catch((err) => console.error('Failed to save manual numbers:', err));
+              }, 250);
             }}
             onItemChange={(idx, updatedItem) => {
               const currentItem = numberItems[idx];
