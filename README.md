@@ -182,4 +182,4 @@ Created and maintained by **Abhinand P. N.**
 
 ## License
 
-No license file is currently included. Unless a license is added, all rights are reserved by the project owner.
+Recipta is proprietary software and is not currently open source. All rights are reserved. Copying, modification, redistribution, resale, or creation of derivative works requires prior written permission from the copyright holder. See [LICENSE](LICENSE) for the complete terms.
