@@ -13,7 +13,51 @@ func RunMigrations(db *sql.DB) error {
 			return fmt.Errorf("migration failed: %w\nStatement: %s", err, stmt)
 		}
 	}
+
+	// Check and add new columns if they do not exist (migration for existing databases)
+	alterations := []struct {
+		column string
+		sql    string
+	}{
+		{"arrangement", "ALTER TABLE number_settings ADD COLUMN arrangement TEXT DEFAULT 'cut-stack'"},
+		{"layer_groups_json", "ALTER TABLE number_settings ADD COLUMN layer_groups_json TEXT DEFAULT '[]'"},
+		{"pattern_groups_json", "ALTER TABLE number_settings ADD COLUMN pattern_groups_json TEXT DEFAULT '{}'"},
+		{"pattern_definitions_json", "ALTER TABLE number_settings ADD COLUMN pattern_definitions_json TEXT DEFAULT '[]'"},
+	}
+
+	for _, alt := range alterations {
+		if !columnExists(db, "number_settings", alt.column) {
+			if _, err := db.Exec(alt.sql); err != nil {
+				return fmt.Errorf("failed to alter table for column %s: %w", alt.column, err)
+			}
+		}
+	}
+
 	return nil
+}
+
+// columnExists checks if a column exists in a given table.
+func columnExists(db *sql.DB, tableName, columnName string) bool {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+
+	var cid int
+	var name, typeStr string
+	var notnull, pk int
+	var dfltVal interface{}
+
+	for rows.Next() {
+		if err := rows.Scan(&cid, &name, &typeStr, &notnull, &dfltVal, &pk); err != nil {
+			continue
+		}
+		if name == columnName {
+			return true
+		}
+	}
+	return false
 }
 
 var migrationStatements = []string{
@@ -65,6 +109,10 @@ var migrationStatements = []string{
 		prefix TEXT DEFAULT '',
 		suffix TEXT DEFAULT '',
 		custom_sequence TEXT DEFAULT '',
+		arrangement TEXT DEFAULT 'cut-stack',
+		layer_groups_json TEXT DEFAULT '[]',
+		pattern_groups_json TEXT DEFAULT '{}',
+		pattern_definitions_json TEXT DEFAULT '[]',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE

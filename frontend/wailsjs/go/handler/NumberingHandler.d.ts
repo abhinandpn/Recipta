@@ -15,6 +15,8 @@ export function ParseManualInput(arg1:string):Promise<Array<string>>;
 
 export function SaveManualNumbers(arg1:string,arg2:Array<string>):Promise<void>;
 
+export function SaveNumberItems(arg1:string,arg2:Array<model.NumberItem>):Promise<void>;
+
 export function SaveNumberSettings(arg1:model.NumberSettings):Promise<void>;
 
 export function ValidateManualNumbers(arg1:Array<string>):Promise<model.ValidationResult>;

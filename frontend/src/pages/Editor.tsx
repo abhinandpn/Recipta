@@ -43,6 +43,8 @@ const WORKSPACE_LAYOUT_KEY = 'recipta-workspace-layout-v1';
 const LINK_SUMMARY_KEY = 'recipta-link-summary-visible';
 const CANVAS_RULER_SIZE = 20;
 const ASSET_PREVIEW_TIMEOUT_MS = 15000;
+const PIXELS_PER_MM = 96 / 25.4;
+const DEFAULT_GROUP_ID = 'group_default_a';
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -78,6 +80,17 @@ function getNumberBoxCenter(item: NumberItem) {
     x: item.x + Math.cos(angle) * halfWidth - Math.sin(angle) * halfHeight,
     y: item.y + Math.sin(angle) * halfWidth + Math.cos(angle) * halfHeight,
   };
+}
+
+function defaultGroupName(index: number) {
+  let value = index + 1;
+  let label = '';
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return `Group ${label}`;
 }
 
 // Finds the intersection between a center-to-center connection and the
@@ -144,8 +157,13 @@ export function Editor() {
   const [numberItems, setNumberItems] = useState<NumberItem[]>(defaultItems);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>(defaultItems[0]?.id ? [defaultItems[0].id] : []);
-  const [layerGroups, setLayerGroups] = useState<LayerGroup[]>([]);
-  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [layerGroups, setLayerGroups] = useState<LayerGroup[]>(() => [{
+    id: DEFAULT_GROUP_ID,
+    name: 'Group A',
+    itemIds: defaultItems.map((item) => item.id),
+  }]);
+  const [groupSequenceSettings, setGroupSequenceSettings] = useState<Record<string, NumberSettings>>({});
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(DEFAULT_GROUP_ID);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState('');
   const [showExportDialog, setShowExportDialog] = useState(false);
@@ -190,6 +208,7 @@ export function Editor() {
   const [gridX, setGridX] = useState(20);
   const [gridY, setGridY] = useState(20);
   const [gridOpacity, setGridOpacity] = useState(35);
+  const [gridMargins, setGridMargins] = useState({ top: 5, right: 5, bottom: 5, left: 5 });
   const [previewZoom, setPreviewZoom] = useState(100);
   const [panMode, setPanMode] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
@@ -488,16 +507,7 @@ export function Editor() {
     setSelectedIndex(index);
     setDraggingIdx(index);
     const item = numberItems[index];
-    const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(item.id));
-    if (!activeGroup) {
-      setActiveGroupId(null);
-      setSelectedLayerIds([item.id]);
-    }
-    groupDragStart.current = Object.fromEntries(
-      numberItems
-        .filter((candidate) => activeGroup?.itemIds.includes(candidate.id))
-        .map((candidate) => [candidate.id, { x: candidate.x, y: candidate.y }])
-    );
+    setSelectedLayerIds([item.id]);
     dragStart.current = {
       x: e.clientX,
       y: e.clientY,
@@ -520,17 +530,7 @@ export function Editor() {
     }
     const draggedItem = numberItems[draggingIdx];
     if (!draggedItem) return;
-    const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(draggedItem.id));
-    const positions: Record<string, { x: number; y: number }> = {};
-    if (!activeGroup) {
-      positions[draggedItem.id] = { x: newX, y: newY };
-    } else {
-      const groupDx = newX - dragStart.current.initialX;
-      const groupDy = newY - dragStart.current.initialY;
-      Object.entries(groupDragStart.current).forEach(([itemId, start]) => {
-        positions[itemId] = { x: Math.max(0, start.x + groupDx), y: Math.max(0, start.y + groupDy) };
-      });
-    }
+    const positions: Record<string, { x: number; y: number }> = { [draggedItem.id]: { x: newX, y: newY } };
     pendingDragPositions.current = positions;
     Object.entries(positions).forEach(([itemId, position]) => {
       const element = canvasContainerRef.current?.querySelector<HTMLElement>(`[data-number-item-id="${CSS.escape(itemId)}"]`);
@@ -674,11 +674,13 @@ export function Editor() {
   const handleAddNumberItem = () => {
     captureUndoState();
     const nextIdx = numberItems.length;
+    const targetGroup = layerGroups.find((group) => group.id === activeGroupId) || null;
+    const targetSettings = targetGroup ? groupSequenceSettings[targetGroup.id] || numberSettings : numberSettings;
     const newItem: NumberItem = {
       id: `ni_${Date.now()}_${nextIdx}`,
       projectId: activeProject.id,
       itemIndex: nextIdx,
-      numberValue: getSampleNumberValue(),
+      numberValue: getSampleNumberValue(targetSettings),
       x: 250 + nextIdx * 20,
       y: 120 + nextIdx * 20,
       width: 140,
@@ -696,11 +698,14 @@ export function Editor() {
       overrideJson: '{}',
     };
     setNumberItems((prev) => [...prev, newItem]);
+    if (targetGroup) {
+      setLayerGroups((groups) => groups.map((group) => group.id === targetGroup.id ? { ...group, itemIds: [...group.itemIds, newItem.id] } : group));
+    }
     setPatternGroups((groups) => ({ ...groups, [newItem.id]: String(nextIdx + 1) }));
     setPatternDefinitions((definitions) => definitions.some((definition) => definition.id === String(nextIdx + 1)) ? definitions : [...definitions, { id: String(nextIdx + 1), name: `Pattern ${String.fromCharCode(65 + nextIdx)}`, color: PATTERN_COLORS[nextIdx % PATTERN_COLORS.length] }]);
     setSelectedIndex(nextIdx);
     setSelectedLayerIds([newItem.id]);
-    setActiveGroupId(null);
+    setActiveGroupId(targetGroup?.id || null);
   };
 
   const setReceiptsPerSheet = (requestedCount: number) => {
@@ -914,11 +919,11 @@ export function Editor() {
   };
 
   // Sample number value calculation
-  const getSampleNumberValue = () => {
-    const prefix = numberSettings?.prefix || '';
-    const suffix = numberSettings?.suffix || '';
-    const start = numberSettings?.startNumber ?? 1;
-    const padding = numberSettings?.padding ?? 4;
+  const getSampleNumberValue = (settings: NumberSettings | null | undefined = numberSettings) => {
+    const prefix = settings?.prefix || '';
+    const suffix = settings?.suffix || '';
+    const start = settings?.startNumber ?? 1;
+    const padding = settings?.padding ?? 4;
     return `${prefix}${String(start).padStart(padding, '0')}${suffix}`;
   };
 
@@ -934,14 +939,35 @@ export function Editor() {
   };
 
   const createLayerGroup = () => {
-    if (selectedLayerIds.length < 2) return;
+    if (selectedLayerIds.length < 1) return;
     captureUndoState();
     const group: LayerGroup = {
       id: `group_${Date.now()}`,
-      name: `Number Group ${layerGroups.length + 1}`,
+      name: defaultGroupName(layerGroups.length),
       itemIds: [...selectedLayerIds],
     };
     setLayerGroups((groups) => [...groups.filter((existing) => !existing.itemIds.some((id) => selectedLayerIds.includes(id))), group]);
+    setGroupSequenceSettings((settings) => ({
+      ...settings,
+      [group.id]: {
+        ...(numberSettings || {
+          id: `ns_${group.id}`,
+          projectId: activeProject?.id || '',
+          mode: 'auto' as const,
+          startNumber: 1,
+          endNumber: 100,
+          step: 1,
+          padding: 4,
+          prefix: '',
+          suffix: '',
+          customSequence: '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+        id: `ns_${group.id}`,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
     setActiveGroupId(group.id);
   };
 
@@ -954,6 +980,11 @@ export function Editor() {
 
   const ungroupLayer = (groupId: string) => {
     setLayerGroups((groups) => groups.filter((group) => group.id !== groupId));
+    setGroupSequenceSettings((settings) => {
+      const next = { ...settings };
+      delete next[groupId];
+      return next;
+    });
     if (activeGroupId === groupId) setActiveGroupId(null);
   };
 
@@ -1037,6 +1068,10 @@ export function Editor() {
     const timestamp = Date.now();
     const duplicates = sources.map((source, index) => ({ ...source, id: `ni_${timestamp}_duplicate_${index}`, itemIndex: numberItems.length + index, x: source.x + 12, y: source.y + 12 }));
     setNumberItems((items) => [...items, ...duplicates]);
+    setLayerGroups((groups) => groups.map((group) => ({
+      ...group,
+      itemIds: [...group.itemIds, ...sources.flatMap((source, index) => group.itemIds.includes(source.id) ? [duplicates[index].id] : [])],
+    })));
     setPatternGroups((groups) => {
       const next = { ...groups };
       sources.forEach((source, index) => {
@@ -1066,12 +1101,14 @@ export function Editor() {
       y: source.y + (dragPoint ? 0 : 12),
     };
     const sourceGroupId = patternGroups[source.id] || String(sourceIndex + 1);
+    const layerGroup = layerGroups.find((group) => group.itemIds.includes(source.id));
     setNumberItems((items) => [...items, duplicate]);
+    if (layerGroup) setLayerGroups((groups) => groups.map((group) => group.id === layerGroup.id ? { ...group, itemIds: [...group.itemIds, duplicate.id] } : group));
     setPatternGroups((groups) => ({ ...groups, [source.id]: sourceGroupId, [duplicate.id]: sourceGroupId }));
     setNumberArrangement(numberArrangement === 'across-sheet' || numberArrangement === 'linked-across-sheet' ? 'linked-across-sheet' : 'linked-cut-stack');
     setSelectedIndex(duplicateIndex);
     setSelectedLayerIds([duplicate.id]);
-    setActiveGroupId(null);
+    setActiveGroupId(layerGroup?.id || null);
     if (dragPoint) {
       setDraggingIdx(duplicateIndex);
       dragStart.current = { x: dragPoint.x, y: dragPoint.y, initialX: source.x, initialY: source.y };
@@ -1141,26 +1178,53 @@ export function Editor() {
       else if (event.key === 'ArrowDown') { event.preventDefault(); nudgeSelectedNumbers(0, distance); }
   };
 
-  const exportNumbers = (() => {
-    const start = numberSettings?.startNumber ?? 1;
-    const end = numberSettings?.endNumber ?? 100;
-    const stepValue = Math.max(1, numberSettings?.step ?? 1);
-    const paddingValue = Math.max(0, numberSettings?.padding ?? 4);
+  const buildSequence = (settings: NumberSettings | null | undefined) => {
+    const start = settings?.startNumber ?? 1;
+    const end = settings?.endNumber ?? 100;
+    const stepValue = Math.max(1, settings?.step ?? 1);
+    const paddingValue = Math.max(0, settings?.padding ?? 4);
     const values: string[] = [];
     for (let value = start; value <= end; value += stepValue) {
-      values.push(`${numberSettings?.prefix || ''}${String(value).padStart(paddingValue, '0')}${numberSettings?.suffix || ''}`);
+      values.push(`${settings?.prefix || ''}${String(value).padStart(paddingValue, '0')}${settings?.suffix || ''}`);
     }
     return values;
-  })();
+  };
+  const exportNumbers = buildSequence(numberSettings);
   const customPatternKeys = numberItems.map((item, index) => patternGroups[item.id] || String(index + 1));
-  const numberLayout = createNumberLayoutPlan(exportNumbers.length, numberItems.length, numberArrangement, customPatternKeys);
+  const groupedItemIds = new Set(layerGroups.flatMap((group) => group.itemIds));
+  const sequenceScopes = [
+    ...layerGroups.map((group) => ({
+      id: group.id,
+      itemIndexes: numberItems.map((item, index) => group.itemIds.includes(item.id) ? index : -1).filter((index) => index >= 0),
+      numbers: buildSequence(groupSequenceSettings[group.id] || numberSettings),
+    })),
+    ...numberItems.filter((item) => !groupedItemIds.has(item.id)).map((item, index) => ({
+      id: `single_${item.id}`,
+      itemIndexes: [numberItems.findIndex((candidate) => candidate.id === item.id)],
+      numbers: exportNumbers,
+    })),
+  ].map((scope) => ({
+    ...scope,
+    layout: createNumberLayoutPlan(
+      scope.numbers.length,
+      scope.itemIndexes.length,
+      numberArrangement,
+      scope.itemIndexes.map((index) => customPatternKeys[index]),
+    ),
+  }));
+  const fallbackLayout = createNumberLayoutPlan(exportNumbers.length, numberItems.length, numberArrangement, customPatternKeys);
+  const numberLayout = sequenceScopes[0]?.layout || fallbackLayout;
   const uniquePatternKeys = numberLayout.groupKeys;
-  const exportPageCount = numberLayout.pageCount;
+  const exportPageCount = Math.max(0, ...sequenceScopes.map((scope) => scope.layout.pageCount));
   const safePreviewSheet = Math.min(Math.max(0, previewSheet), Math.max(0, exportPageCount - 1));
-  const previewSheetNumbers = numberItems.map((_, index) => {
-    const numberIndex = numberLayout.numberIndexFor(safePreviewSheet, index);
-    return exportNumbers[numberIndex] ?? '';
-  });
+  const numberForPosition = (pageIndex: number, positionIndex: number) => {
+    const scope = sequenceScopes.find((candidate) => candidate.itemIndexes.includes(positionIndex));
+    if (!scope) return '';
+    const scopedPositionIndex = scope.itemIndexes.indexOf(positionIndex);
+    return scope.numbers[scope.layout.numberIndexFor(pageIndex, scopedPositionIndex)] ?? '';
+  };
+  const previewSheetNumbers = numberItems.map((_, index) => numberForPosition(safePreviewSheet, index));
+  const exportPageNumbers = Array.from({ length: exportPageCount }, (_, pageIndex) => numberItems.map((_, positionIndex) => numberForPosition(pageIndex, positionIndex)));
   const positionNumberIndexes = numberItems.map((_, index) => Array.from(
     { length: exportPageCount },
     (_, pageIndex) => numberLayout.numberIndexFor(pageIndex, index),
@@ -1211,6 +1275,7 @@ export function Editor() {
         canvasWidth: canvasSize.width,
         canvasHeight: canvasSize.height,
         numbers: exportNumbers,
+        pageNumbers: exportPageNumbers,
         positions: numberItems,
         pageWidthPoints: pageWidth,
         pageHeightPoints: pageHeight,
@@ -1259,33 +1324,11 @@ export function Editor() {
     const currentItem = numberItems[idx];
     if (currentItem && currentItem.numberValue === updatedItem.numberValue && currentItem.x === updatedItem.x && currentItem.y === updatedItem.y && currentItem.rotation === updatedItem.rotation && currentItem.fontFamily === updatedItem.fontFamily && currentItem.fontSize === updatedItem.fontSize && currentItem.fontStyle === updatedItem.fontStyle && currentItem.fontColor === updatedItem.fontColor && currentItem.alignment === updatedItem.alignment) return;
     captureUndoState();
-    setNumberItems((prev) => {
-      const previousItem = prev[idx];
-      const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(updatedItem.id));
-      if (!activeGroup || !previousItem) {
-        return prev.map((item, index) => index === idx ? updatedItem : item);
-      }
-      const dx = updatedItem.x - previousItem.x;
-      const dy = updatedItem.y - previousItem.y;
-      return prev.map((item, index) => {
-        if (!activeGroup.itemIds.includes(item.id)) return item;
-        if (index === idx) return updatedItem;
-        return {
-          ...item,
-          x: Math.max(0, item.x + dx),
-          y: Math.max(0, item.y + dy),
-          rotation: updatedItem.rotation,
-          fontFamily: updatedItem.fontFamily,
-          fontSize: updatedItem.fontSize,
-          fontStyle: updatedItem.fontStyle,
-          fontColor: updatedItem.fontColor,
-          alignment: updatedItem.alignment,
-        };
-      });
-    });
+    setNumberItems((prev) => prev.map((item, index) => index === idx ? updatedItem : item));
   };
 
   const selectedNumberItem = numberItems[selectedIndex];
+  const activeGroup = layerGroups.find((group) => group.id === activeGroupId) || null;
   const updateSelectedNumberPosition = (changes: Partial<Pick<NumberItem, 'x' | 'y' | 'rotation'>>) => {
     if (!selectedNumberItem) return;
     handleNumberItemChange(selectedIndex, { ...selectedNumberItem, ...changes });
@@ -1295,6 +1338,14 @@ export function Editor() {
     <div className="editor" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
       {/* Editor Toolbar */}
       <div className="editor-toolbar">
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={createLayerGroup}
+          disabled={selectedLayerIds.length === 0}
+          title="Create a group from the selected number positions"
+        >
+          + New Group
+        </button>
         <div className="header-grid-menu" ref={gridMenuRef}>
           <button
             className={`btn btn-ghost btn-sm editor-grid-trigger ${(showGrid || showGridMenu) ? 'toolbar-control-active' : ''}`}
@@ -1310,6 +1361,10 @@ export function Editor() {
             <label className="header-grid-toggle"><span>Show grid lines</span><input type="checkbox" checked={showGrid} onChange={(event) => setShowGrid(event.target.checked)} /></label>
             <label className="header-grid-toggle"><span>Snap positions</span><input type="checkbox" checked={snapToGrid} onChange={(event) => setSnapToGrid(event.target.checked)} /></label>
             <div className="header-grid-fields"><label><span>Horizontal</span><input type="number" min="2" max="500" value={gridX} onChange={(event) => setGridX(Math.max(2, Number(event.target.value) || 2))} /></label><label><span>Vertical</span><input type="number" min="2" max="500" value={gridY} onChange={(event) => setGridY(Math.max(2, Number(event.target.value) || 2))} /></label></div>
+            <div className="header-grid-margin-fields">
+              <span>Margins (mm)</span>
+              {(['top', 'right', 'bottom', 'left'] as const).map((side) => <label key={side}><span>{side}</span><input type="number" min="0" max="100" step="0.5" value={gridMargins[side]} onChange={(event) => setGridMargins((margins) => ({ ...margins, [side]: Math.max(0, Number(event.target.value) || 0) }))} /></label>)}
+            </div>
             <label className="header-grid-opacity"><span>Opacity <b>{gridOpacity}%</b></span><input type="range" min="10" max="90" step="5" value={gridOpacity} onChange={(event) => setGridOpacity(Number(event.target.value))} /></label>
             <div className="header-guide-summary"><span>Ruler guides: {verticalGuides.length + horizontalGuides.length}</span>{(verticalGuides.length > 0 || horizontalGuides.length > 0) && <button onClick={() => { setVerticalGuides([]); setHorizontalGuides([]); }}>Clear guides</button>}</div>
             <small>Drag from the top or left ruler to create a guide. Click the ruler corner to toggle the grid.</small>
@@ -1375,36 +1430,15 @@ export function Editor() {
               <div><span className="dashboard-eyebrow">Batch output</span><h2 className="dialog-title">Export numbered PDF</h2></div>
               <button onClick={() => setShowExportDialog(false)} disabled={!!exportProgress} aria-label="Close export settings">×</button>
             </div>
+            <label className="export-field export-file-name-field">
+              <span>File name</span>
+              <input value={exportFileName} onChange={(e) => setExportFileName(e.target.value)} />
+            </label>
             <div className="export-summary">
               <div><strong>{exportNumbers.length}</strong><span>Numbered copies</span></div>
               <div><strong>{numberItems.length}</strong><span>Items per page</span></div>
               <div><strong>{exportPageCount}</strong><span>PDF pages</span></div>
             </div>
-            <div className="export-flow-preview">
-              <span>Sheet 1: {numberItems.map((_, index) => exportNumbers[numberLayout.numberIndexFor(0, index)]).filter(Boolean).join(' · ') || 'No numbers'}</span>
-              <b>→</b>
-              <span>{exportNumbers.length ? exportNumbers[exportNumbers.length - 1] : '—'}</span>
-            </div>
-            <div className="export-content-section">
-              <span className="export-section-label">Export content</span>
-              <div className="export-content-selector">
-                <button className={exportContent === 'design-numbers' ? 'active' : ''} onClick={() => setExportContent('design-numbers')}>
-                  <span className="export-content-icon">▧</span><strong>Design + Numbers</strong><small>Template artwork with added numbering</small>
-                </button>
-                <button className={exportContent === 'numbers-only' ? 'active' : ''} onClick={() => setExportContent('numbers-only')}>
-                  <span className="export-content-icon text">T</span><strong>Numbers Only</strong><small>Remove artwork for preprinted sheets</small>
-                </button>
-              </div>
-              {exportContent === 'numbers-only' && <div className="numbers-only-notice"><span>✓</span> Background artwork will be removed. Only number text will appear on a white PDF page.</div>}
-            </div>
-            <div className="export-settings-grid">
-              <label className="export-field export-field-wide"><span>File name</span><input value={exportFileName} onChange={(e) => setExportFileName(e.target.value)} /></label>
-              <label className="export-field"><span>Paper size</span><select value={exportPaperSize} onChange={(e) => setExportPaperSize(e.target.value as 'A4' | 'A3' | 'source')}><option value="A4">A4</option><option value="A3">A3</option><option value="source">Match source</option></select></label>
-              <label className="export-field"><span>Orientation</span><select value={exportOrientation} onChange={(e) => setExportOrientation(e.target.value as 'portrait' | 'landscape')}><option value="portrait">Portrait</option><option value="landscape">Landscape</option></select></label>
-              <label className="export-field export-field-wide"><span>Image quality <b>{exportQuality}%</b></span><input type="range" min="50" max="100" step="5" value={exportQuality} onChange={(e) => setExportQuality(Number(e.target.value))} /></label>
-            </div>
-            <div className="export-note"><span>i</span><p>{numberArrangement === 'linked-across-sheet' ? 'Linked Across Sheet: primary positions advance across each sheet and every linked duplicate prints its source number.' : numberArrangement === 'linked-cut-stack' ? 'Linked Cut & Stack: each primary position receives a cut-stack range and every linked duplicate prints its source number.' : numberArrangement === 'custom-pattern' ? 'Custom Pattern: positions assigned to the same pattern share a number; each different pattern receives the next sequence value.' : numberArrangement === 'same-number' ? 'Same Number: every linked position receives the identical number for coupon-and-stub printing, then advances on the next PDF page.' : numberArrangement === 'cut-stack' ? 'Cut & Stack: each position receives its own continuous range so cut piles can be stacked in sequence.' : 'Across Sheet: numbers fill every position in order, then continue on the next PDF page.'}</p></div>
-            <div className="export-hidden-layers"><span>Not exported:</span> grid · rulers · guides · selection boxes · flow arrows · layer labels</div>
             {exportProgress && <div className="export-progress"><div><span>Rendering page {exportProgress.current} of {exportProgress.total}</span><b>{Math.round((exportProgress.current / Math.max(1, exportProgress.total)) * 100)}%</b></div><progress value={exportProgress.current} max={exportProgress.total} /></div>}
             <div className="dialog-actions">
               <button className="btn btn-secondary" onClick={() => setShowExportDialog(false)} disabled={!!exportProgress}>Cancel</button>
@@ -1422,6 +1456,23 @@ export function Editor() {
             {!leftPanelCollapsed && <span>Tools &amp; Layers</span>}
             <button onClick={() => !workspaceLocked && setLeftPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={leftPanelCollapsed ? 'Expand left panel' : 'Collapse left panel'}>{leftPanelCollapsed ? '›' : '‹'}</button>
           </div>
+          <section className="panel-section group-layers-panel">
+            <div className="layer-panel-heading">
+              <div className="panel-section-title">Groups</div>
+              <button className="btn btn-ghost btn-sm" onClick={createLayerGroup} disabled={selectedLayerIds.length === 0}>+ New Group</button>
+            </div>
+            {layerGroups.length ? (
+              <div className="group-layers-list">
+                {layerGroups.map((group) => {
+                  const groupIndexes = numberItems.map((item, index) => group.itemIds.includes(item.id) ? index : -1).filter((index) => index >= 0);
+                  return <button key={group.id} className={`group-layer-card ${activeGroupId === group.id ? 'active' : ''}`} onClick={() => selectLayerGroup(group)}>
+                    <span><strong>{group.name}</strong><small>{groupIndexes.length} number {groupIndexes.length === 1 ? 'position' : 'positions'}</small></span>
+                    <em>{groupIndexes.map((index) => `#${index + 1} ${previewSheetNumbers[index] || '—'}`).join(' · ')}</em>
+                  </button>;
+                })}
+              </div>
+            ) : <p className="group-layers-empty">Select a number position, then choose New Group.</p>}
+          </section>
           <div ref={setNumberPositionsTarget} className="number-positions-left-target" />
           {numberFlowTarget && createPortal(<div className="panel-section number-flow-panel">
             <div className="layer-panel-heading">
@@ -1718,6 +1769,19 @@ export function Editor() {
                 />
               )}
 
+              {canvasSrc && showGrid && (
+                <div
+                  className="canvas-margin-overlay"
+                  style={{
+                    top: `${gridMargins.top * PIXELS_PER_MM}px`,
+                    right: `${gridMargins.right * PIXELS_PER_MM}px`,
+                    bottom: `${gridMargins.bottom * PIXELS_PER_MM}px`,
+                    left: `${gridMargins.left * PIXELS_PER_MM}px`,
+                  }}
+                  aria-label="Document margins"
+                />
+              )}
+
               {canvasSrc && showNumberFlow && (numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && (
                 <svg className="number-flow-overlay custom-pattern-connections" width="100%" height="100%" viewBox={`0 0 ${canvasSize?.width || 1} ${canvasSize?.height || 1}`} aria-hidden="true">
                   <defs><marker id="custom-flow-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="#8ab6d1" /></marker></defs>
@@ -1877,6 +1941,7 @@ export function Editor() {
           <div className="panel-dock-controls right">
             <button onClick={() => !workspaceLocked && setRightPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={rightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}>{rightPanelCollapsed ? '‹' : '›'}</button>
             {!rightPanelCollapsed && <span>Properties</span>}
+            {!rightPanelCollapsed && activeGroup && <span className="active-group-indicator" title="Active number group">Group: {activeGroup.name}</span>}
           </div>
           <div className="editor-properties-scroll">
           <NumberingPanel
@@ -1886,6 +1951,8 @@ export function Editor() {
             numberGroupKeys={customPatternKeys}
             previewNumbers={previewSheetNumbers}
             numberPositionsTarget={numberPositionsTarget}
+            activeGroupName={activeGroup?.name || null}
+            activeGroupSequence={activeGroup ? groupSequenceSettings[activeGroup.id] || numberSettings : null}
             selectedIndex={selectedIndex}
             onSelectIndex={(idx) => {
               setSelectedIndex(idx);
@@ -1908,6 +1975,10 @@ export function Editor() {
               settingsSaveTimer.current = window.setTimeout(() => {
                 api.saveNumberSettings(newSettings).catch((err) => console.error('Failed to save number settings:', err));
               }, 250);
+            }}
+            onGroupSettingsChange={(newSettings) => {
+              if (!activeGroup) return;
+              setGroupSequenceSettings((settings) => ({ ...settings, [activeGroup.id]: newSettings }));
             }}
             onItemChange={handleNumberItemChange}
           />

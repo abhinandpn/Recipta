@@ -4,7 +4,7 @@
  */
 
 import type { Project, ProjectFull, Asset } from '../types';
-import type { NumberSettings, ManualNumber, ValidationResult } from '../types';
+import type { NumberSettings, ManualNumber, ValidationResult, NumberItem } from '../types';
 import type { SheetSettings, SheetLayout, CropBleedSettings } from '../types';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -402,6 +402,14 @@ export async function saveManualNumbers(projectId: string, numbers: string[]): P
     // @ts-ignore
     const { SaveManualNumbers } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
     return SaveManualNumbers(projectId, numbers);
+  }
+}
+
+export async function saveNumberItems(projectId: string, items: NumberItem[]): Promise<void> {
+  if (isWailsAvailable()) {
+    // @ts-ignore
+    const { SaveNumberItems } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
+    return SaveNumberItems(projectId, items as any);
   }
 }
 

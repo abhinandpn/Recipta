@@ -22,6 +22,10 @@ type NumberSettings struct {
 	Prefix         string     `json:"prefix"`
 	Suffix         string     `json:"suffix"`
 	CustomSequence string     `json:"customSequence"`
+	Arrangement    string     `json:"arrangement"`
+	LayerGroupsJSON string    `json:"layerGroupsJson"`
+	PatternGroupsJSON string  `json:"patternGroupsJson"`
+	PatternDefsJSON   string  `json:"patternDefinitionsJson"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
 }

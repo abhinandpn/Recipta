@@ -31,9 +31,9 @@ func (r *NumberRepo) CreateSettings(s *model.NumberSettings) error {
 	s.UpdatedAt = now
 
 	_, err := r.db.Exec(
-		`INSERT INTO number_settings (id, project_id, mode, start_number, end_number, step, padding, prefix, suffix, custom_sequence, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.ProjectID, s.Mode, s.StartNumber, s.EndNumber, s.Step, s.Padding, s.Prefix, s.Suffix, s.CustomSequence, s.CreatedAt, s.UpdatedAt,
+		`INSERT INTO number_settings (id, project_id, mode, start_number, end_number, step, padding, prefix, suffix, custom_sequence, arrangement, layer_groups_json, pattern_groups_json, pattern_definitions_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.ProjectID, s.Mode, s.StartNumber, s.EndNumber, s.Step, s.Padding, s.Prefix, s.Suffix, s.CustomSequence, s.Arrangement, s.LayerGroupsJSON, s.PatternGroupsJSON, s.PatternDefsJSON, s.CreatedAt, s.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create number settings: %w", err)
@@ -45,9 +45,9 @@ func (r *NumberRepo) CreateSettings(s *model.NumberSettings) error {
 func (r *NumberRepo) GetSettingsByProjectID(projectID string) (*model.NumberSettings, error) {
 	s := &model.NumberSettings{}
 	err := r.db.QueryRow(
-		`SELECT id, project_id, mode, start_number, end_number, step, padding, prefix, suffix, custom_sequence, created_at, updated_at
+		`SELECT id, project_id, mode, start_number, end_number, step, padding, prefix, suffix, custom_sequence, arrangement, layer_groups_json, pattern_groups_json, pattern_definitions_json, created_at, updated_at
 		 FROM number_settings WHERE project_id = ?`, projectID,
-	).Scan(&s.ID, &s.ProjectID, &s.Mode, &s.StartNumber, &s.EndNumber, &s.Step, &s.Padding, &s.Prefix, &s.Suffix, &s.CustomSequence, &s.CreatedAt, &s.UpdatedAt)
+	).Scan(&s.ID, &s.ProjectID, &s.Mode, &s.StartNumber, &s.EndNumber, &s.Step, &s.Padding, &s.Prefix, &s.Suffix, &s.CustomSequence, &s.Arrangement, &s.LayerGroupsJSON, &s.PatternGroupsJSON, &s.PatternDefsJSON, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil // No settings yet
 	}
@@ -61,9 +61,9 @@ func (r *NumberRepo) GetSettingsByProjectID(projectID string) (*model.NumberSett
 func (r *NumberRepo) UpdateSettings(s *model.NumberSettings) error {
 	s.UpdatedAt = time.Now()
 	_, err := r.db.Exec(
-		`UPDATE number_settings SET mode = ?, start_number = ?, end_number = ?, step = ?, padding = ?, prefix = ?, suffix = ?, custom_sequence = ?, updated_at = ?
+		`UPDATE number_settings SET mode = ?, start_number = ?, end_number = ?, step = ?, padding = ?, prefix = ?, suffix = ?, custom_sequence = ?, arrangement = ?, layer_groups_json = ?, pattern_groups_json = ?, pattern_definitions_json = ?, updated_at = ?
 		 WHERE project_id = ?`,
-		s.Mode, s.StartNumber, s.EndNumber, s.Step, s.Padding, s.Prefix, s.Suffix, s.CustomSequence, s.UpdatedAt, s.ProjectID,
+		s.Mode, s.StartNumber, s.EndNumber, s.Step, s.Padding, s.Prefix, s.Suffix, s.CustomSequence, s.Arrangement, s.LayerGroupsJSON, s.PatternGroupsJSON, s.PatternDefsJSON, s.UpdatedAt, s.ProjectID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update number settings: %w", err)

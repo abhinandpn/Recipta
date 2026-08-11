@@ -242,6 +242,10 @@ export namespace model {
 	    prefix: string;
 	    suffix: string;
 	    customSequence: string;
+	    arrangement: string;
+	    layerGroupsJson: string;
+	    patternGroupsJson: string;
+	    patternDefinitionsJson: string;
 	    // Go type: time
 	    createdAt: any;
 	    // Go type: time
@@ -263,6 +267,10 @@ export namespace model {
 	        this.prefix = source["prefix"];
 	        this.suffix = source["suffix"];
 	        this.customSequence = source["customSequence"];
+	        this.arrangement = source["arrangement"];
+	        this.layerGroupsJson = source["layerGroupsJson"];
+	        this.patternGroupsJson = source["patternGroupsJson"];
+	        this.patternDefinitionsJson = source["patternDefinitionsJson"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
 	    }

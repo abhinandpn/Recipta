@@ -6,6 +6,8 @@ export interface PdfExportOptions {
   canvasWidth: number;
   canvasHeight: number;
   numbers: string[];
+  /** Optional precomputed values for every position on every PDF page. */
+  pageNumbers?: string[][];
   positions: NumberItem[];
   pageWidthPoints: number;
   pageHeightPoints: number;
@@ -109,7 +111,7 @@ export async function generateNumberedPdf(options: PdfExportOptions, onProgress?
   if (!context) throw new Error('Canvas rendering is unavailable.');
 
   const layout = createNumberLayoutPlan(options.numbers.length, options.positions.length, options.arrangement, options.patternGroups);
-  const pageCount = layout.pageCount;
+  const pageCount = options.pageNumbers?.length ?? layout.pageCount;
   const pages: Uint8Array[] = [];
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
     context.clearRect(0, 0, width, height);
@@ -122,8 +124,9 @@ export async function generateNumberedPdf(options: PdfExportOptions, onProgress?
       context.fillRect(0, 0, width, height);
     }
     options.positions.forEach((position, positionIndex) => {
-      const numberIndex = layout.numberIndexFor(pageIndex, positionIndex);
-      const number = options.numbers[numberIndex];
+      const number = options.pageNumbers
+        ? options.pageNumbers[pageIndex]?.[positionIndex]
+        : options.numbers[layout.numberIndexFor(pageIndex, positionIndex)];
       if (number === undefined || !position.isVisible) return;
       const fontSize = position.fontSize * exportScale;
       const fontWeight = position.fontStyle.includes('bold') ? '700' : '400';

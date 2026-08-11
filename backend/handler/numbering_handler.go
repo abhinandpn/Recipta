@@ -56,3 +56,8 @@ func (h *NumberingHandler) SaveManualNumbers(projectID string, numbers []string)
 func (h *NumberingHandler) GetManualNumbers(projectID string) ([]*model.ManualNumber, error) {
 	return h.numberingService.GetManualNumbers(projectID)
 }
+
+// SaveNumberItems persists the number items configuration from the frontend.
+func (h *NumberingHandler) SaveNumberItems(projectID string, items []*model.NumberItem) error {
+	return h.numberingService.SaveNumberItems(projectID, items)
+}

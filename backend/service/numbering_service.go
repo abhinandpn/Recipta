@@ -124,3 +124,8 @@ func (s *NumberingService) SaveManualNumbers(projectID string, numberValues []st
 func (s *NumberingService) GetManualNumbers(projectID string) ([]*model.ManualNumber, error) {
 	return s.numberRepo.GetManualNumbers(projectID)
 }
+
+// SaveNumberItems replaces all numbering overlay items for a project in the database.
+func (s *NumberingService) SaveNumberItems(projectID string, items []*model.NumberItem) error {
+	return s.numberRepo.SetNumberItems(projectID, items)
+}

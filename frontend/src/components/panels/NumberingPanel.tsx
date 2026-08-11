@@ -28,6 +28,8 @@ interface NumberingPanelProps {
   numberGroupKeys: string[];
   previewNumbers: string[];
   numberPositionsTarget: HTMLDivElement | null;
+  activeGroupName: string | null;
+  activeGroupSequence: NumberSettings | null;
   selectedIndex: number;
   onSelectIndex: (index: number) => void;
   onAddNumberItem: () => void;
@@ -36,6 +38,7 @@ interface NumberingPanelProps {
   onRemoveNumberItem: (index: number) => void;
   onReceiptsPerSheetChange: (count: number) => void;
   onSettingsChange: (settings: NumberSettings) => void;
+  onGroupSettingsChange: (settings: NumberSettings) => void;
   onItemChange: (index: number, item: NumberItem) => void;
 }
 
@@ -46,6 +49,8 @@ export function NumberingPanel({
   numberGroupKeys,
   previewNumbers,
   numberPositionsTarget,
+  activeGroupName,
+  activeGroupSequence,
   selectedIndex,
   onSelectIndex,
   onAddNumberItem,
@@ -54,16 +59,18 @@ export function NumberingPanel({
   onRemoveNumberItem,
   onReceiptsPerSheetChange,
   onSettingsChange,
+  onGroupSettingsChange,
   onItemChange,
 }: NumberingPanelProps) {
   // Local state for auto sequence settings
-  const [startNumber, setStartNumber] = useState(numberSettings?.startNumber ?? 1);
-  const [endNumber, setEndNumber] = useState(numberSettings?.endNumber ?? 100);
-  const [step, setStep] = useState(numberSettings?.step ?? 1);
-  const [padding, setPadding] = useState(numberSettings?.padding ?? 4);
-  const [prefix, setPrefix] = useState(numberSettings?.prefix || '');
-  const [suffix, setSuffix] = useState(numberSettings?.suffix || '');
-  const [showAffixes, setShowAffixes] = useState(Boolean(numberSettings?.prefix || numberSettings?.suffix));
+  const sequenceSettings = activeGroupName ? activeGroupSequence : numberSettings;
+  const [startNumber, setStartNumber] = useState(sequenceSettings?.startNumber ?? 1);
+  const [endNumber, setEndNumber] = useState(sequenceSettings?.endNumber ?? 100);
+  const [step, setStep] = useState(sequenceSettings?.step ?? 1);
+  const [padding, setPadding] = useState(sequenceSettings?.padding ?? 4);
+  const [prefix, setPrefix] = useState(sequenceSettings?.prefix || '');
+  const [suffix, setSuffix] = useState(sequenceSettings?.suffix || '');
+  const [showAffixes, setShowAffixes] = useState(Boolean(sequenceSettings?.prefix || sequenceSettings?.suffix));
   const [typographyExpanded, setTypographyExpanded] = useState(false);
   const [fontMenuOpen, setFontMenuOpen] = useState(false);
   const [positionMenu, setPositionMenu] = useState<{ index: number; x: number; y: number } | null>(null);
@@ -79,6 +86,16 @@ export function NumberingPanel({
   const [fontStyle, setFontStyle] = useState(activeItem?.fontStyle || 'bold');
   const [fontColor, setFontColor] = useState(activeItem?.fontColor || '#111827');
   const [alignment, setAlignment] = useState(activeItem?.alignment || 'left');
+
+  useEffect(() => {
+    setStartNumber(sequenceSettings?.startNumber ?? 1);
+    setEndNumber(sequenceSettings?.endNumber ?? 100);
+    setStep(sequenceSettings?.step ?? 1);
+    setPadding(sequenceSettings?.padding ?? 4);
+    setPrefix(sequenceSettings?.prefix || '');
+    setSuffix(sequenceSettings?.suffix || '');
+    setShowAffixes(Boolean(sequenceSettings?.prefix || sequenceSettings?.suffix));
+  }, [activeGroupName, sequenceSettings?.id]);
 
   // Sync state when active selected item changes
   useEffect(() => {
@@ -105,7 +122,7 @@ export function NumberingPanel({
   // Update settings when sequence parameters change
   useEffect(() => {
     const updated: NumberSettings = {
-      id: numberSettings?.id || 'ns_' + projectId,
+      id: sequenceSettings?.id || 'ns_' + projectId,
       projectId,
       mode: 'auto',
       startNumber,
@@ -115,11 +132,12 @@ export function NumberingPanel({
       prefix,
       suffix,
       customSequence: '',
-      createdAt: numberSettings?.createdAt || new Date().toISOString(),
+      createdAt: sequenceSettings?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    onSettingsChange(updated);
-  }, [startNumber, endNumber, step, padding, prefix, suffix]);
+    if (activeGroupName) onGroupSettingsChange(updated);
+    else onSettingsChange(updated);
+  }, [startNumber, endNumber, step, padding, prefix, suffix, activeGroupName, sequenceSettings?.id]);
 
   // Update active item properties when form inputs change
   useEffect(() => {
@@ -245,7 +263,8 @@ export function NumberingPanel({
 
       {/* Automatic Mode Options */}
       <div className="panel-section sequence-generator-section">
-          <div className="panel-section-title">Sequence Generator</div>
+          <div className="panel-section-title">{activeGroupName ? `${activeGroupName} Sequence` : 'Sequence Generator'}</div>
+          {activeGroupName && <p className="active-group-sequence-note">This sequence is used only by this group in preview and export.</p>}
 
           <div className="panel-row">
             <span className="panel-label">Start #</span>
@@ -264,7 +283,7 @@ export function NumberingPanel({
             />
           </div>
 
-          <div className="panel-row">
+          {!activeGroupName && <div className="panel-row">
             <span className="panel-label">Receipts / sheet</span>
             <input
               type="number"
@@ -275,7 +294,7 @@ export function NumberingPanel({
               onChange={(e) => onReceiptsPerSheetChange(Math.max(1, Math.min(100, Number(e.target.value) || 1)))}
             />
             <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>Adds or removes positions</span>
-          </div>
+          </div>}
 
           <div className="panel-row">
             <span className="panel-label">Step</span>

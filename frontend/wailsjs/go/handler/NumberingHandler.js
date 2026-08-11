@@ -26,6 +26,10 @@ export function SaveManualNumbers(arg1, arg2) {
   return window['go']['handler']['NumberingHandler']['SaveManualNumbers'](arg1, arg2);
 }
 
+export function SaveNumberItems(arg1, arg2) {
+  return window['go']['handler']['NumberingHandler']['SaveNumberItems'](arg1, arg2);
+}
+
 export function SaveNumberSettings(arg1) {
   return window['go']['handler']['NumberingHandler']['SaveNumberSettings'](arg1);
 }
