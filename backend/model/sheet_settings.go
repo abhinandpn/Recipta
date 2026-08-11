@@ -4,10 +4,10 @@ package model
 type SheetSettings struct {
 	ID           string  `json:"id"`
 	ProjectID    string  `json:"projectId"`
-	PaperSize    string  `json:"paperSize"` // A4, A3, Letter, Legal, Custom
-	PaperWidth   float64 `json:"paperWidth"`   // mm
-	PaperHeight  float64 `json:"paperHeight"`  // mm
-	Orientation  string  `json:"orientation"`  // portrait, landscape
+	PaperSize    string  `json:"paperSize"`   // A4, A3, Letter, Legal, Custom
+	PaperWidth   float64 `json:"paperWidth"`  // mm
+	PaperHeight  float64 `json:"paperHeight"` // mm
+	Orientation  string  `json:"orientation"` // portrait, landscape
 	Rows         int     `json:"rows"`
 	Columns      int     `json:"columns"`
 	HGap         float64 `json:"hGap"`         // mm
@@ -21,15 +21,15 @@ type SheetSettings struct {
 
 // SheetLayout is the calculated result of applying sheet settings + crop/bleed.
 type SheetLayout struct {
-	ItemsPerSheet  int       `json:"itemsPerSheet"`
-	TotalSheets    int       `json:"totalSheets"`
-	TotalItems     int       `json:"totalItems"`
-	RemainingItems int       `json:"remainingItems"`
-	ItemWidth      float64   `json:"itemWidth"`  // mm
-	ItemHeight     float64   `json:"itemHeight"` // mm
-	PrintableWidth float64   `json:"printableWidth"`
-	PrintableHeight float64  `json:"printableHeight"`
-	Positions      []ItemPosition `json:"positions"` // position of each item on a single sheet
+	ItemsPerSheet   int            `json:"itemsPerSheet"`
+	TotalSheets     int            `json:"totalSheets"`
+	TotalItems      int            `json:"totalItems"`
+	RemainingItems  int            `json:"remainingItems"`
+	ItemWidth       float64        `json:"itemWidth"`  // mm
+	ItemHeight      float64        `json:"itemHeight"` // mm
+	PrintableWidth  float64        `json:"printableWidth"`
+	PrintableHeight float64        `json:"printableHeight"`
+	Positions       []ItemPosition `json:"positions"` // position of each item on a single sheet
 }
 
 // ItemPosition represents the position of an item on a sheet.

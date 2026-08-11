@@ -14,8 +14,8 @@ type NumberItem struct {
 	Rotation      float64 `json:"rotation"`
 	FontFamily    string  `json:"fontFamily"`
 	FontSize      float64 `json:"fontSize"`
-	FontStyle     string  `json:"fontStyle"`  // normal, bold, italic, bold-italic
-	FontColor     string  `json:"fontColor"`  // hex color
+	FontStyle     string  `json:"fontStyle"` // normal, bold, italic, bold-italic
+	FontColor     string  `json:"fontColor"` // hex color
 	LetterSpacing float64 `json:"letterSpacing"`
 	Alignment     string  `json:"alignment"` // left, center, right
 	IsVisible     bool    `json:"isVisible"`

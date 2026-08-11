@@ -25,24 +25,31 @@ export async function convertPdfToImageDataUrl(file: File): Promise<string> {
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2.0 }); // High DPI scale
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
+  let canvas: HTMLCanvasElement | null = null;
+  try {
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 2.0 }); // High DPI scale
 
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  canvas.height = viewport.height;
-  canvas.width = viewport.width;
+    canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
 
-  if (!context) throw new Error('Canvas context not available');
+    if (!context) throw new Error('Canvas context not available');
 
-  const renderContext: any = {
-    canvasContext: context,
-    viewport: viewport,
-  };
-
-  await page.render(renderContext).promise;
-  return canvas.toDataURL('image/png');
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    const preview = canvas.toDataURL('image/png');
+    page.cleanup();
+    return preview;
+  } finally {
+    if (canvas) {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+    await loadingTask.destroy();
+  }
 }
 
 // ─── Browser Fallback Storage ───

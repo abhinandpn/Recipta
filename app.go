@@ -19,18 +19,18 @@ type App struct {
 	// Handlers (exposed to frontend via Wails bindings)
 	// Initialized as empty structs in NewApp() so Wails can reflect on them.
 	// Their internal services are wired during startup().
-	ProjectHandler  *handler.ProjectHandler
+	ProjectHandler   *handler.ProjectHandler
 	NumberingHandler *handler.NumberingHandler
-	SheetHandler    *handler.SheetHandler
+	SheetHandler     *handler.SheetHandler
 }
 
 // NewApp creates a new App application struct.
 // Handlers are pre-allocated so Wails can bind them before startup() runs.
 func NewApp() *App {
 	return &App{
-		ProjectHandler:  &handler.ProjectHandler{},
+		ProjectHandler:   &handler.ProjectHandler{},
 		NumberingHandler: &handler.NumberingHandler{},
-		SheetHandler:    &handler.SheetHandler{},
+		SheetHandler:     &handler.SheetHandler{},
 	}
 }
 

@@ -3,6 +3,7 @@ import { useAppStore } from '../store/appStore';
 import { NumberingPanel } from '../components/panels/NumberingPanel';
 import * as api from '../services/api';
 import { generateNumberedPdf } from '../services/pdfExport';
+import { toggleAppFullscreen } from '../services/fullscreen';
 import type { Asset, NumberSettings, ManualNumber, NumberItem } from '../types';
 import '../styles/components/editor.css';
 
@@ -26,8 +27,46 @@ interface EditorHistorySnapshot {
   numberArrangement: 'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern' | 'linked-cut-stack' | 'linked-across-sheet';
 }
 
+interface WorkspaceLayout {
+  leftWidth: number;
+  rightWidth: number;
+  leftCollapsed: boolean;
+  rightCollapsed: boolean;
+  locked: boolean;
+}
+
 const PATTERN_COLORS = ['#62a7d2', '#d18a5b', '#79ad78', '#b285c5', '#c7ae61', '#cf7474', '#6fb8ad', '#9b9bd0'];
 const assetPreviewCache = new Map<string, string>();
+const WORKSPACE_LAYOUT_KEY = 'recipta-workspace-layout-v1';
+const LINK_SUMMARY_KEY = 'recipta-link-summary-visible';
+const CANVAS_RULER_SIZE = 20;
+const ASSET_PREVIEW_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => { window.clearTimeout(timer); resolve(value); },
+      (error) => { window.clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+function loadWorkspaceLayout(): WorkspaceLayout {
+  const fallback: WorkspaceLayout = { leftWidth: 365, rightWidth: 430, leftCollapsed: false, rightCollapsed: false, locked: false };
+  try {
+    const saved = JSON.parse(localStorage.getItem(WORKSPACE_LAYOUT_KEY) || '{}') as Partial<WorkspaceLayout>;
+    return {
+      leftWidth: typeof saved.leftWidth === 'number' ? Math.min(480, Math.max(240, saved.leftWidth)) : fallback.leftWidth,
+      rightWidth: typeof saved.rightWidth === 'number' ? Math.min(480, Math.max(240, saved.rightWidth)) : fallback.rightWidth,
+      leftCollapsed: typeof saved.leftCollapsed === 'boolean' ? saved.leftCollapsed : fallback.leftCollapsed,
+      rightCollapsed: typeof saved.rightCollapsed === 'boolean' ? saved.rightCollapsed : fallback.rightCollapsed,
+      locked: typeof saved.locked === 'boolean' ? saved.locked : fallback.locked,
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 function getNumberBoxCenter(item: NumberItem) {
   const angle = ((item.rotation || 0) * Math.PI) / 180;
@@ -118,7 +157,10 @@ export function Editor() {
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
   const [flowDirection, setFlowDirection] = useState<'top-bottom' | 'bottom-top' | 'left-right' | 'right-left' | 'custom'>('top-bottom');
   const [showNumberFlow, setShowNumberFlow] = useState(false);
+  const [showConnectionEditor, setShowConnectionEditor] = useState(false);
+  const [showLinkSummary, setShowLinkSummary] = useState(() => localStorage.getItem(LINK_SUMMARY_KEY) === 'true');
   const [previewSheet, setPreviewSheet] = useState(0);
+  const [showSheetPreview, setShowSheetPreview] = useState(false);
   const [numberArrangement, setNumberArrangement] = useState<'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern' | 'linked-cut-stack' | 'linked-across-sheet'>('cut-stack');
   const [patternGroups, setPatternGroups] = useState<Record<string, string>>(() => Object.fromEntries(defaultItems.map((item, index) => [item.id, String(index + 1)])));
   const [patternDefinitions, setPatternDefinitions] = useState<PatternDefinition[]>(() => defaultItems.map((_, index) => ({ id: String(index + 1), name: `Pattern ${String.fromCharCode(65 + index)}`, color: PATTERN_COLORS[index % PATTERN_COLORS.length] })));
@@ -135,6 +177,7 @@ export function Editor() {
   const shortcutHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
   const settingsSaveTimer = useRef<number | null>(null);
   const manualNumbersSaveTimer = useRef<number | null>(null);
+  const assetLoadRequestId = useRef(0);
 
   // Grid, snapping, and preview controls are editor-only aids.
   const [showGrid, setShowGrid] = useState(false);
@@ -146,17 +189,29 @@ export function Editor() {
   const [panMode, setPanMode] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
+  const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
   const [verticalGuides, setVerticalGuides] = useState<number[]>([]);
   const [horizontalGuides, setHorizontalGuides] = useState<number[]>([]);
   const [draggingGuide, setDraggingGuide] = useState<{ axis: 'x' | 'y'; index: number } | null>(null);
+  const initialWorkspaceLayout = useRef<WorkspaceLayout>(loadWorkspaceLayout());
+  const [leftPanelWidth, setLeftPanelWidth] = useState<number>(initialWorkspaceLayout.current.leftWidth);
+  const [rightPanelWidth, setRightPanelWidth] = useState<number>(initialWorkspaceLayout.current.rightWidth);
+  const [leftPanelCollapsed, setLeftPanelCollapsed] = useState<boolean>(initialWorkspaceLayout.current.leftCollapsed);
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState<boolean>(initialWorkspaceLayout.current.rightCollapsed);
+  const [workspaceLocked, setWorkspaceLocked] = useState<boolean>(initialWorkspaceLayout.current.locked);
+  const [panelsHidden, setPanelsHidden] = useState(false);
 
   // Dragging state for active selected number overlay
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const dragStart = useRef({ x: 0, y: 0, initialX: 0, initialY: 0 });
   const groupDragStart = useRef<Record<string, { x: number; y: number }>>({});
+  const pendingDragPositions = useRef<Record<string, { x: number; y: number }>>({});
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const canvasAreaRef = useRef<HTMLDivElement>(null);
-  const panStart = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+  const canvasZoomStageRef = useRef<HTMLDivElement>(null);
+  const panStart = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 });
+  const panFrame = useRef<number | null>(null);
+  const pendingPanPoint = useRef<{ x: number; y: number } | null>(null);
 
   // Loaded canvas template image/PNG preview source URL
   const [canvasSrc, setCanvasSrc] = useState<string>('');
@@ -225,11 +280,37 @@ export function Editor() {
   }, []);
 
   React.useEffect(() => {
-    let cancelled = false;
+    const openShortcuts = () => setShowShortcutsDialog(true);
+    const resetLayout = () => resetWorkspaceLayout();
+    window.addEventListener('recipta:show-shortcuts', openShortcuts);
+    window.addEventListener('recipta:reset-layout', resetLayout);
+    return () => {
+      window.removeEventListener('recipta:show-shortcuts', openShortcuts);
+      window.removeEventListener('recipta:reset-layout', resetLayout);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify({
+      leftWidth: leftPanelWidth,
+      rightWidth: rightPanelWidth,
+      leftCollapsed: leftPanelCollapsed,
+      rightCollapsed: rightPanelCollapsed,
+      locked: workspaceLocked,
+    }));
+  }, [leftPanelWidth, rightPanelWidth, leftPanelCollapsed, rightPanelCollapsed, workspaceLocked]);
+
+  React.useEffect(() => {
+    localStorage.setItem(LINK_SUMMARY_KEY, String(showLinkSummary));
+  }, [showLinkSummary]);
+
+  React.useEffect(() => {
+    const requestId = ++assetLoadRequestId.current;
     async function loadAssetSource() {
       if (!activeProject || !currentAsset) {
         setCanvasSrc('');
         setCanvasSize(null);
+        setIsLoading(false);
         return;
       }
 
@@ -239,14 +320,18 @@ export function Editor() {
         const cacheKey = `${activeProject.id}:${currentAsset.id}:${currentAsset.storedPath}`;
         const cachedPreview = assetPreviewCache.get(cacheKey);
         if (cachedPreview) {
-          if (!cancelled) setCanvasSrc(cachedPreview);
+          if (assetLoadRequestId.current === requestId) setCanvasSrc(cachedPreview);
           return;
         }
         // Browser imports are already data URLs; desktop imports are loaded
         // securely from the Go backend.
         const dataUrl = currentAsset.storedPath.startsWith('data:')
           ? currentAsset.storedPath
-          : await api.getAssetDataUrl(activeProject.id, currentAsset.id);
+          : await withTimeout(
+            api.getAssetDataUrl(activeProject.id, currentAsset.id),
+            ASSET_PREVIEW_TIMEOUT_MS,
+            'The design took too long to load. Please try changing the image again.',
+          );
         // Use the actual payload MIME type when available. Older browser-mode
         // imports can be labelled "pdf" even though they already contain the
         // rasterized PNG preview.
@@ -258,30 +343,34 @@ export function Editor() {
 
         if (needsPdfRasterization) {
           // Rasterize PDF Page 1 to high-resolution PNG URL
-          const response = await fetch(dataUrl);
+          const response = await withTimeout(fetch(dataUrl), ASSET_PREVIEW_TIMEOUT_MS, 'The PDF preview request timed out.');
           if (!response.ok) {
             throw new Error(`Unable to read PDF (${response.status})`);
           }
           const blob = await response.blob();
           const file = new File([blob], currentAsset.originalFilename, { type: 'application/pdf' });
-          const rasterizedUrl = await api.convertPdfToImageDataUrl(file);
+          const rasterizedUrl = await withTimeout(
+            api.convertPdfToImageDataUrl(file),
+            ASSET_PREVIEW_TIMEOUT_MS,
+            'PDF rendering timed out. Try importing a smaller or repaired PDF.',
+          );
           assetPreviewCache.set(cacheKey, rasterizedUrl);
-          if (!cancelled) setCanvasSrc(rasterizedUrl);
+          if (assetLoadRequestId.current === requestId) setCanvasSrc(rasterizedUrl);
         } else {
           assetPreviewCache.set(cacheKey, dataUrl);
-          if (!cancelled) setCanvasSrc(dataUrl);
+          if (assetLoadRequestId.current === requestId) setCanvasSrc(dataUrl);
         }
       } catch (err) {
-        if (cancelled) return;
+        if (assetLoadRequestId.current !== requestId) return;
         console.error('Failed to load asset preview:', err);
         setCanvasSrc('');
         setError(`Failed to render ${currentAsset.fileType.toUpperCase()} preview: ${err instanceof Error ? err.message : String(err)}`);
       } finally {
-        if (!cancelled) setIsLoading(false);
+        if (assetLoadRequestId.current === requestId) setIsLoading(false);
       }
     }
     loadAssetSource();
-    return () => { cancelled = true; };
+    return () => { if (assetLoadRequestId.current === requestId) assetLoadRequestId.current += 1; };
   }, [currentAsset, activeProject]);
 
   React.useLayoutEffect(() => {
@@ -291,20 +380,46 @@ export function Editor() {
     const updateRulerOrigin = () => {
       const areaRect = area.getBoundingClientRect();
       const documentRect = documentCanvas.getBoundingClientRect();
-      setRulerOrigin({ x: documentRect.left - areaRect.left, y: documentRect.top - areaRect.top });
+      const nextOrigin = {
+        x: documentRect.left - areaRect.left + area.scrollLeft,
+        y: documentRect.top - areaRect.top + area.scrollTop,
+      };
+      setRulerOrigin((origin) => Math.abs(origin.x - nextOrigin.x) < 0.5 && Math.abs(origin.y - nextOrigin.y) < 0.5 ? origin : nextOrigin);
     };
-    updateRulerOrigin();
+    const frame = requestAnimationFrame(updateRulerOrigin);
+    const resizeObserver = new ResizeObserver(updateRulerOrigin);
+    resizeObserver.observe(area);
+    resizeObserver.observe(documentCanvas);
     area.addEventListener('scroll', updateRulerOrigin, { passive: true });
     window.addEventListener('resize', updateRulerOrigin);
     return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
       area.removeEventListener('scroll', updateRulerOrigin);
       window.removeEventListener('resize', updateRulerOrigin);
     };
-  }, [canvasSize, previewZoom, canvasSrc]);
+  }, [canvasSize, previewZoom, canvasSrc, panelsHidden, leftPanelWidth, rightPanelWidth, leftPanelCollapsed, rightPanelCollapsed]);
+
+  React.useLayoutEffect(() => {
+    const area = canvasAreaRef.current;
+    const documentCanvas = canvasContainerRef.current;
+    if (!area || !documentCanvas) return;
+    const frame = requestAnimationFrame(() => {
+      const areaRect = area.getBoundingClientRect();
+      const documentRect = documentCanvas.getBoundingClientRect();
+      const nextOrigin = {
+        x: documentRect.left - areaRect.left + area.scrollLeft,
+        y: documentRect.top - areaRect.top + area.scrollTop,
+      };
+      setRulerOrigin((origin) => Math.abs(origin.x - nextOrigin.x) < 0.5 && Math.abs(origin.y - nextOrigin.y) < 0.5 ? origin : nextOrigin);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [canvasPan.x, canvasPan.y]);
 
   React.useEffect(() => () => {
     if (connectionDragFrame.current !== null) cancelAnimationFrame(connectionDragFrame.current);
     if (numberDragFrame.current !== null) cancelAnimationFrame(numberDragFrame.current);
+    if (panFrame.current !== null) cancelAnimationFrame(panFrame.current);
     if (settingsSaveTimer.current !== null) window.clearTimeout(settingsSaveTimer.current);
     if (manualNumbersSaveTimer.current !== null) window.clearTimeout(manualNumbersSaveTimer.current);
   }, []);
@@ -331,6 +446,7 @@ export function Editor() {
       const asset = await api.importImage(activeProject.id);
       if (asset) {
         setCurrentAsset(asset);
+        setCanvasPan({ x: 0, y: 0 });
         await api.updateProject({
           ...activeProject,
           imagePath: asset.storedPath,
@@ -346,6 +462,7 @@ export function Editor() {
 
   // Dragging handlers for canvas number box
   const handleMouseDown = (e: React.MouseEvent, index: number) => {
+    if (panMode || spacePressed || e.button === 1) return;
     e.stopPropagation();
     captureUndoState();
     setSelectedIndex(index);
@@ -367,6 +484,7 @@ export function Editor() {
       initialX: item.x,
       initialY: item.y,
     };
+    pendingDragPositions.current = {};
   };
 
   const updateDraggedNumber = (clientX: number, clientY: number) => {
@@ -380,20 +498,26 @@ export function Editor() {
       newX = Math.round(newX / gridX) * gridX;
       newY = Math.round(newY / gridY) * gridY;
     }
-    setNumberItems((prev) => {
-      const draggedItem = prev[draggingIdx];
-      if (!draggedItem) return prev;
-      const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(draggedItem.id));
-      if (!activeGroup) {
-        if (draggedItem.x === newX && draggedItem.y === newY) return prev;
-        return prev.map((item, index) => index === draggingIdx ? { ...item, x: newX, y: newY } : item);
-      }
+    const draggedItem = numberItems[draggingIdx];
+    if (!draggedItem) return;
+    const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(draggedItem.id));
+    const positions: Record<string, { x: number; y: number }> = {};
+    if (!activeGroup) {
+      positions[draggedItem.id] = { x: newX, y: newY };
+    } else {
       const groupDx = newX - dragStart.current.initialX;
       const groupDy = newY - dragStart.current.initialY;
-      return prev.map((item) => {
-        const start = groupDragStart.current[item.id];
-        return start ? { ...item, x: Math.max(0, start.x + groupDx), y: Math.max(0, start.y + groupDy) } : item;
+      Object.entries(groupDragStart.current).forEach(([itemId, start]) => {
+        positions[itemId] = { x: Math.max(0, start.x + groupDx), y: Math.max(0, start.y + groupDy) };
       });
+    }
+    pendingDragPositions.current = positions;
+    Object.entries(positions).forEach(([itemId, position]) => {
+      const element = canvasContainerRef.current?.querySelector<HTMLElement>(`[data-number-item-id="${CSS.escape(itemId)}"]`);
+      if (element) {
+        element.style.left = `${position.x}px`;
+        element.style.top = `${position.y}px`;
+      }
     });
   };
 
@@ -412,8 +536,18 @@ export function Editor() {
       return;
     }
     if (isPanning && canvasAreaRef.current) {
-      canvasAreaRef.current.scrollLeft = panStart.current.scrollLeft - (e.clientX - panStart.current.x);
-      canvasAreaRef.current.scrollTop = panStart.current.scrollTop - (e.clientY - panStart.current.y);
+      pendingPanPoint.current = { x: e.clientX, y: e.clientY };
+      if (panFrame.current === null) {
+        panFrame.current = requestAnimationFrame(() => {
+          const point = pendingPanPoint.current;
+          if (point && canvasZoomStageRef.current) {
+            const x = panStart.current.offsetX + point.x - panStart.current.x;
+            const y = panStart.current.offsetY + point.y - panStart.current.y;
+            canvasZoomStageRef.current.style.transform = `translate(${x}px, ${y}px)`;
+          }
+          panFrame.current = null;
+        });
+      }
       return;
     }
     if (draggingGuide && canvasContainerRef.current) {
@@ -455,6 +589,11 @@ export function Editor() {
       numberDragFrame.current = null;
       pendingNumberDragPoint.current = null;
       updateDraggedNumber(event.clientX, event.clientY);
+      const committedPositions = pendingDragPositions.current;
+      if (Object.keys(committedPositions).length) {
+        setNumberItems((items) => items.map((item) => committedPositions[item.id] ? { ...item, ...committedPositions[item.id] } : item));
+      }
+      pendingDragPositions.current = {};
     }
     setDraggingIdx(null);
     if (draggingGuide) {
@@ -465,6 +604,12 @@ export function Editor() {
       }
     }
     setDraggingGuide(null);
+    if (isPanning) {
+      if (panFrame.current !== null) cancelAnimationFrame(panFrame.current);
+      panFrame.current = null;
+      pendingPanPoint.current = null;
+      setCanvasPan({ x: panStart.current.offsetX + event.clientX - panStart.current.x, y: panStart.current.offsetY + event.clientY - panStart.current.y });
+    }
     setIsPanning(false);
   };
 
@@ -494,8 +639,8 @@ export function Editor() {
     panStart.current = {
       x: e.clientX,
       y: e.clientY,
-      scrollLeft: canvasAreaRef.current.scrollLeft,
-      scrollTop: canvasAreaRef.current.scrollTop,
+      offsetX: canvasPan.x,
+      offsetY: canvasPan.y,
     };
   };
 
@@ -786,6 +931,43 @@ export function Editor() {
     setPreviewZoom(Math.min(300, Math.max(25, nextZoom)));
   };
 
+  const resetWorkspaceLayout = () => {
+    setLeftPanelWidth(365);
+    setRightPanelWidth(430);
+    setLeftPanelCollapsed(false);
+    setRightPanelCollapsed(false);
+    setWorkspaceLocked(false);
+    setPanelsHidden(false);
+  };
+
+  const toggleFullscreen = async () => {
+    try {
+      await toggleAppFullscreen();
+    } catch (err) {
+      setError(`Unable to change full screen mode: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const startPanelResize = (side: 'left' | 'right', event: React.MouseEvent) => {
+    if (workspaceLocked || panelsHidden) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = side === 'left' ? leftPanelWidth : rightPanelWidth;
+    const handleMove = (moveEvent: MouseEvent) => {
+      const delta = side === 'left' ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+      const nextWidth = Math.min(480, Math.max(240, startWidth + delta));
+      if (side === 'left') setLeftPanelWidth(nextWidth); else setRightPanelWidth(nextWidth);
+    };
+    const handleUp = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      document.body.classList.remove('workspace-resizing');
+    };
+    document.body.classList.add('workspace-resizing');
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+  };
+
   const duplicateSelectedNumber = () => {
     const sourceIds = selectedLayerIds.length ? selectedLayerIds : [numberItems[selectedIndex]?.id].filter(Boolean) as string[];
     const sources = sourceIds.map((id) => numberItems.find((item) => item.id === id)).filter(Boolean) as NumberItem[];
@@ -817,6 +999,17 @@ export function Editor() {
     setNumberItems((items) => items.map((item) => ids.includes(item.id) ? { ...item, x: Math.max(0, item.x + dx), y: Math.max(0, item.y + dy) } : item));
   };
 
+  const rotateSelectedNumbers = (degrees: number) => {
+    const ids = selectedLayerIds.length ? selectedLayerIds : [numberItems[selectedIndex]?.id].filter(Boolean) as string[];
+    if (!ids.length) return;
+    captureUndoState();
+    setNumberItems((items) => items.map((item) => {
+      if (!ids.includes(item.id)) return item;
+      const rotation = (((item.rotation || 0) + degrees) % 360 + 360) % 360;
+      return { ...item, rotation };
+    }));
+  };
+
   shortcutHandlerRef.current = (event: KeyboardEvent) => {
       const target = event.target;
       const isTextField = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
@@ -826,15 +1019,25 @@ export function Editor() {
       if (modifier && !isTextField && key === 'y') { event.preventDefault(); redoEditorChange(); return; }
       if (event.code === 'Space' && !isTextField) { event.preventDefault(); setSpacePressed(true); return; }
       if (isTextField) return;
+      if (key === 'f' && !modifier) { event.preventDefault(); void toggleFullscreen(); return; }
+      if (event.key === 'Tab' && !modifier) { event.preventDefault(); setPanelsHidden((hidden) => !hidden); return; }
+      if (key === 'h' && !modifier) { event.preventDefault(); setPanMode(true); return; }
+      if (key === 'v' && !modifier) { event.preventDefault(); setPanMode(false); return; }
+      if (modifier && event.shiftKey && key === 'l') { event.preventDefault(); setWorkspaceLocked((locked) => !locked); return; }
+      if (modifier && event.shiftKey && key === 'r') { event.preventDefault(); resetWorkspaceLayout(); return; }
+      if (!modifier && event.key === '[' && !workspaceLocked) { event.preventDefault(); setLeftPanelCollapsed((collapsed) => !collapsed); return; }
+      if (!modifier && event.key === ']' && !workspaceLocked) { event.preventDefault(); setRightPanelCollapsed((collapsed) => !collapsed); return; }
       if (key === '?' || (event.shiftKey && event.key === '/')) { event.preventDefault(); setShowShortcutsDialog(true); return; }
       if (event.key === 'Escape') { setShowShortcutsDialog(false); setShowExportDialog(false); setSelectedLayerIds([]); setSelectedPatternPositionIds([]); setSelectedConnection(null); return; }
-      if (modifier && key === 'd') { event.preventDefault(); duplicateSelectedNumber(); return; }
+      if (modifier && key === 'j') { event.preventDefault(); duplicateSelectedNumber(); return; }
       if (modifier && key === 'g' && !event.shiftKey) { event.preventDefault(); createLayerGroup(); return; }
       if (modifier && key === 'g' && event.shiftKey) { event.preventDefault(); if (activeGroupId) { captureUndoState(); ungroupLayer(activeGroupId); } return; }
-      if (modifier && key === 'e') { event.preventDefault(); if (canvasSrc) setShowExportDialog(true); return; }
+      if (modifier && event.altKey && event.shiftKey && key === 'w') { event.preventDefault(); if (canvasSrc) setShowExportDialog(true); return; }
       if (modifier && event.key === '=') { event.preventDefault(); changeZoom(previewZoom + 10); return; }
       if (modifier && event.key === '-') { event.preventDefault(); changeZoom(previewZoom - 10); return; }
-      if (key === 'g' && !modifier) { event.preventDefault(); setShowGrid((visible) => !visible); return; }
+      if (key === 'n' && event.shiftKey && !modifier) { event.preventDefault(); handleAddNumberItem(); return; }
+      if (key === 'r' && !modifier) { event.preventDefault(); rotateSelectedNumbers(event.shiftKey ? -90 : 90); return; }
+      if (modifier && (key === "'" || key === '’')) { event.preventDefault(); setShowGrid((visible) => !visible); return; }
       if ((event.key === 'Delete' || event.key === 'Backspace') && numberItems.length > 1) { event.preventDefault(); handleRemoveNumberItem(selectedIndex); return; }
       const distance = event.shiftKey ? 10 : 1;
       if (event.key === 'ArrowLeft') { event.preventDefault(); nudgeSelectedNumbers(-distance, 0); }
@@ -942,6 +1145,32 @@ export function Editor() {
     }
   };
 
+  const linkedCopiesEnabled = numberArrangement === 'linked-across-sheet' || numberArrangement === 'linked-cut-stack';
+  const primaryFlowMode: 'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern' =
+    numberArrangement === 'linked-across-sheet' ? 'across-sheet' :
+      numberArrangement === 'linked-cut-stack' ? 'cut-stack' : numberArrangement;
+  const selectPrimaryFlow = (mode: 'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern') => {
+    const nextMode = linkedCopiesEnabled && mode === 'across-sheet'
+      ? 'linked-across-sheet'
+      : linkedCopiesEnabled && mode === 'cut-stack'
+        ? 'linked-cut-stack'
+        : mode;
+    setNumberArrangement(nextMode);
+    setShowNumberFlow(mode === 'custom-pattern');
+    setConnectionDrag(null);
+    setPreviewSheet(0);
+  };
+  const toggleLinkedCopies = () => {
+    if (primaryFlowMode !== 'across-sheet' && primaryFlowMode !== 'cut-stack') return;
+    setNumberArrangement(linkedCopiesEnabled
+      ? primaryFlowMode
+      : primaryFlowMode === 'across-sheet' ? 'linked-across-sheet' : 'linked-cut-stack');
+    setShowNumberFlow(false);
+    if (linkedCopiesEnabled) setShowConnectionEditor(false);
+    setConnectionDrag(null);
+    setPreviewSheet(0);
+  };
+
   return (
     <div className="editor" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
       {/* Editor Toolbar — Tab Switcher */}
@@ -966,7 +1195,7 @@ export function Editor() {
         <button className="btn btn-ghost btn-sm" onClick={handleImportImage}>
           {currentAsset ? '📷 Change Image' : '📷 Import Image'}
         </button>
-        <button className="btn btn-primary btn-sm" onClick={handleAddNumberItem}>
+        <button className="btn btn-primary btn-sm" onClick={handleAddNumberItem} title="Add number position (Shift + N)">
           + Add Number Position
         </button>
         <button
@@ -979,18 +1208,32 @@ export function Editor() {
         <button
           className={`btn btn-ghost btn-sm ${panMode ? 'toolbar-control-active' : ''}`}
           onClick={() => setPanMode((enabled) => !enabled)}
-          title="Drag the preview to move around. You can also hold Space or use the middle mouse button."
+          title="Hand tool (H). Use V to return to Select."
         >
           ✋ Pan {panMode ? 'On' : 'Off'}
         </button>
-        <button className="btn btn-primary btn-sm export-toolbar-button" onClick={() => setShowExportDialog(true)} disabled={!currentAsset}>
-          <span>⇩</span> Export PDF
+        <button
+          className={`btn btn-ghost btn-sm ${workspaceLocked ? 'toolbar-control-active' : ''}`}
+          onClick={() => setWorkspaceLocked((locked) => !locked)}
+          title={workspaceLocked ? 'Unlock panel layout' : 'Lock panel layout'}
+        >
+          {workspaceLocked ? '🔒 Workspace' : '🔓 Workspace'}
         </button>
-        <button className="btn btn-ghost btn-sm shortcuts-toolbar-button" onClick={() => setShowShortcutsDialog(true)} title="Keyboard shortcuts (?)">
-          ⌨ Shortcuts
+        <button
+          className={`btn btn-ghost btn-sm ${showSheetPreview ? 'toolbar-control-active' : ''}`}
+          onClick={() => setShowSheetPreview((visible) => !visible)}
+          disabled={!currentAsset || exportPageCount < 1}
+          title={currentAsset ? 'Open or close sheet navigation' : 'Import a design to use Sheet Preview'}
+        >
+          ◫ Sheet Preview
         </button>
 
         <div className="editor-toolbar-spacer" />
+        <button className="export-toolbar-button" onClick={() => setShowExportDialog(true)} disabled={!currentAsset} title="Open PDF export settings (Ctrl/Command + Alt/Option + Shift + W)">
+          <span className="export-toolbar-icon">⇩</span>
+          <span className="export-toolbar-copy"><strong>Export PDF</strong><small>{currentAsset ? `${exportPageCount} ${exportPageCount === 1 ? 'page' : 'pages'}` : 'Import a design first'}</small></span>
+          <kbd>⌘⇧⌥W</kbd>
+        </button>
         <div className="zoom-controls" aria-label="Preview zoom controls">
           <button className="zoom-button" onClick={() => changeZoom(previewZoom - 10)} title="Zoom out">−</button>
           <select
@@ -1007,7 +1250,7 @@ export function Editor() {
             ))}
           </select>
           <button className="zoom-button" onClick={() => changeZoom(previewZoom + 10)} title="Zoom in">+</button>
-          <button className="zoom-reset" onClick={() => changeZoom(100)} title="Reset preview zoom">Reset</button>
+          <button className="zoom-reset" onClick={() => { changeZoom(100); setCanvasPan({ x: 0, y: 0 }); }} title="Reset preview zoom and pan position">Reset</button>
         </div>
       </div>
 
@@ -1017,9 +1260,10 @@ export function Editor() {
             <div className="export-dialog-heading"><div><span className="dashboard-eyebrow">Editor controls</span><h2 className="dialog-title">Keyboard shortcuts</h2></div><button onClick={() => setShowShortcutsDialog(false)} aria-label="Close shortcuts">×</button></div>
             <div className="shortcuts-grid">
               <section><h3>History</h3><div><span>Undo</span><kbd>Ctrl/⌘ Z</kbd></div><div><span>Redo</span><kbd>Ctrl/⌘ Shift Z</kbd></div><div><span>Redo alternative</span><kbd>Ctrl/⌘ Y</kbd></div></section>
-              <section><h3>Number layers</h3><div><span>Duplicate linked text</span><kbd>Ctrl/⌘ D</kbd></div><div><span>Delete selected</span><kbd>Delete</kbd></div><div><span>Group layers</span><kbd>Ctrl/⌘ G</kbd></div><div><span>Ungroup</span><kbd>Ctrl/⌘ Shift G</kbd></div></section>
-              <section><h3>Position</h3><div><span>Nudge 1 px</span><kbd>Arrow keys</kbd></div><div><span>Nudge 10 px</span><kbd>Shift + Arrow</kbd></div><div><span>Temporary pan</span><kbd>Hold Space</kbd></div></section>
-              <section><h3>View &amp; output</h3><div><span>Toggle grid</span><kbd>G</kbd></div><div><span>Zoom in</span><kbd>Ctrl/⌘ +</kbd></div><div><span>Zoom out</span><kbd>Ctrl/⌘ −</kbd></div><div><span>Export settings</span><kbd>Ctrl/⌘ E</kbd></div></section>
+              <section><h3>Number layers</h3><div><span>Add number position</span><kbd>Shift N</kbd></div><div><span>Duplicate linked text</span><kbd>Ctrl/⌘ J</kbd></div><div><span>Delete selected</span><kbd>Delete</kbd></div><div><span>Group layers</span><kbd>Ctrl/⌘ G</kbd></div><div><span>Ungroup</span><kbd>Ctrl/⌘ Shift G</kbd></div></section>
+              <section><h3>Tools &amp; position</h3><div><span>Select / Move tool</span><kbd>V</kbd></div><div><span>Hand / Pan tool</span><kbd>H</kbd></div><div><span>Temporary Hand tool</span><kbd>Hold Space</kbd></div><div><span>Rotate 90° clockwise</span><kbd>R</kbd></div><div><span>Rotate 90° counter-clockwise</span><kbd>Shift R</kbd></div><div><span>Nudge 1 px</span><kbd>Arrow keys</kbd></div><div><span>Nudge 10 px</span><kbd>Shift + Arrow</kbd></div></section>
+              <section><h3>View &amp; output</h3><div><span>Full screen mode</span><kbd>F</kbd></div><div><span>Hide/show panels</span><kbd>Tab</kbd></div><div><span>Collapse left panel</span><kbd>[</kbd></div><div><span>Collapse right panel</span><kbd>]</kbd></div><div><span>Toggle grid</span><kbd>Ctrl/⌘ '</kbd></div><div><span>Zoom in</span><kbd>Ctrl/⌘ +</kbd></div><div><span>Zoom out</span><kbd>Ctrl/⌘ −</kbd></div><div><span>Export PDF</span><kbd>Ctrl/⌘ Alt/⌥ Shift W</kbd></div></section>
+              <section><h3>Workspace</h3><div><span>Lock/unlock layout</span><kbd>Ctrl/⌘ Shift L</kbd></div><div><span>Reset panel layout</span><kbd>Ctrl/⌘ Shift R</kbd></div><div><span>Resize panels</span><kbd>Drag divider</kbd></div></section>
               <section><h3>General</h3><div><span>Close / clear selection</span><kbd>Esc</kbd></div><div><span>Show shortcuts</span><kbd>?</kbd></div></section>
             </div>
             <div className="dialog-actions"><button className="btn btn-primary" onClick={() => setShowShortcutsDialog(false)}>Done</button></div>
@@ -1074,64 +1318,64 @@ export function Editor() {
       )}
 
       {/* Editor Main Area */}
-      <div className="editor-main">
+      <div className={`editor-main ${panelsHidden ? 'workspace-panels-hidden' : ''} ${workspaceLocked ? 'workspace-locked' : ''}`}>
         {/* Left Sidebar — Tools & Layers */}
-        <aside className="editor-sidebar-left">
-          <div className="panel-section">
-            <div className="panel-section-title">Project</div>
-            <div className="panel-row">
-              <span className="panel-label">Name</span>
-              <span className="panel-value">{activeProject.name}</span>
-            </div>
-            <div className="panel-row">
-              <span className="panel-label">Type</span>
-              <span className="panel-value">
-                {activeProject.type === 'receipt' ? 'Receipt / Coupon' : 'Foil / Emboss'}
-              </span>
-            </div>
+        <aside className={`editor-sidebar-left ${leftPanelCollapsed ? 'panel-collapsed' : ''}`} style={{ width: leftPanelCollapsed ? 34 : leftPanelWidth }}>
+          <div className="panel-dock-controls">
+            {!leftPanelCollapsed && <span>Tools &amp; Layers</span>}
+            <button onClick={() => !workspaceLocked && setLeftPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={leftPanelCollapsed ? 'Expand left panel' : 'Collapse left panel'}>{leftPanelCollapsed ? '›' : '‹'}</button>
           </div>
-
           <div className="panel-section number-flow-panel">
             <div className="layer-panel-heading">
               <div className="panel-section-title">Number Flow</div>
               <span>{numberItems.length} steps</span>
             </div>
             <div className="arrangement-selector">
-              <button className={numberArrangement === 'across-sheet' ? 'active' : ''} onClick={() => { setNumberArrangement('across-sheet'); setShowNumberFlow(false); setConnectionDrag(null); setPreviewSheet(0); }}>
+              <button className={primaryFlowMode === 'across-sheet' ? 'active' : ''} onClick={() => selectPrimaryFlow('across-sheet')}>
                 <span>1·2·3</span><strong>Across sheet</strong><small>Fill positions, then next sheet</small>
               </button>
-              <button className={numberArrangement === 'cut-stack' ? 'active' : ''} onClick={() => { setNumberArrangement('cut-stack'); setShowNumberFlow(false); setConnectionDrag(null); setPreviewSheet(0); }}>
+              <button className={primaryFlowMode === 'cut-stack' ? 'active' : ''} onClick={() => selectPrimaryFlow('cut-stack')}>
                 <span>1│101│201</span><strong>Cut &amp; stack</strong><small>One range per position</small>
               </button>
-              <button className={numberArrangement === 'same-number' ? 'active' : ''} onClick={() => { setNumberArrangement('same-number'); setShowNumberFlow(false); setConnectionDrag(null); setPreviewSheet(0); }}>
+              <button className={primaryFlowMode === 'same-number' ? 'active' : ''} onClick={() => selectPrimaryFlow('same-number')}>
                 <span>1 = 1 = 1</span><strong>Same number</strong><small>Repeat on coupon and stub</small>
               </button>
-              <button className={numberArrangement === 'custom-pattern' ? 'active' : ''} onClick={() => { setNumberArrangement('custom-pattern'); setShowNumberFlow(true); setPreviewSheet(0); }}>
+              <button className={primaryFlowMode === 'custom-pattern' ? 'active' : ''} onClick={() => selectPrimaryFlow('custom-pattern')}>
                 <span>1 = 1 │ 2</span><strong>Custom pattern</strong><small>Choose which positions match</small>
               </button>
-              <button className={numberArrangement === 'linked-cut-stack' ? 'active' : ''} onClick={() => { setNumberArrangement('linked-cut-stack'); setShowNumberFlow(false); setPreviewSheet(0); }}>
-                <span>1│35│69 + copies</span><strong>Linked cut &amp; stack</strong><small>Cut-stack with duplicate text</small>
-              </button>
-              <button className={numberArrangement === 'linked-across-sheet' ? 'active' : ''} onClick={() => { setNumberArrangement('linked-across-sheet'); setShowNumberFlow(false); setPreviewSheet(0); }}>
-                <span>1│2│3 + copies</span><strong>Linked across sheet</strong><small>Across-sheet with duplicate text</small>
-              </button>
             </div>
-            <div className="linked-cut-stack-preset">
+            {(primaryFlowMode === 'across-sheet' || primaryFlowMode === 'cut-stack') && (
+              <button className={`linked-copies-toggle ${linkedCopiesEnabled ? 'active' : ''}`} onClick={toggleLinkedCopies} role="switch" aria-checked={linkedCopiesEnabled}>
+                <span className="linked-copies-switch"><i /></span>
+                <span><strong>Linked copies</strong><small>Use matching numbers in duplicated positions</small></span>
+              </button>
+            )}
+            {linkedCopiesEnabled && <div className="linked-cut-stack-preset">
               <div><strong>3 paired receipts</strong><small>1 ↔ 4 &nbsp;·&nbsp; 2 ↔ 5 &nbsp;·&nbsp; 3 ↔ 6</small></div>
               <div className="linked-preset-actions"><button onClick={() => applyThreePairLinkedPreset('linked-across-sheet')} disabled={numberItems.length < 6}>Across: 1 · 2 · 3</button><button onClick={() => applyThreePairLinkedPreset('linked-cut-stack')} disabled={numberItems.length < 6}>Cut-stack: 1 · 35 · 69</button></div>
               {numberItems.length < 6 && <span>Add or duplicate until there are 6 number layers.</span>}
-            </div>
-            <div className="three-up-preset">
+            </div>}
+            {linkedCopiesEnabled && (
+              <div className="linked-details-controls">
+                <button className={`connection-editor-toggle ${showConnectionEditor ? 'active' : ''}`} onClick={() => setShowConnectionEditor((visible) => !visible)}>
+                  <span>⌁</span><span><strong>{showConnectionEditor ? 'Hide connections' : 'Edit connections'}</strong><small>Advanced matching, names and flow arrows</small></span><b>{showConnectionEditor ? '▴' : '▾'}</b>
+                </button>
+                <button className={`link-summary-toggle ${showLinkSummary ? 'active' : ''}`} onClick={() => setShowLinkSummary((visible) => !visible)}>
+                  <span>☷</span><span><strong>{showLinkSummary ? 'Hide Link Summary' : 'View Link Summary'}</strong><small>{numberItems.length} positions in {uniquePatternKeys.length} groups</small></span><b>{showLinkSummary ? '▴' : '▾'}</b>
+                </button>
+              </div>
+            )}
+            {(primaryFlowMode === 'cut-stack') && <div className="three-up-preset">
               <div><span>3-UP</span><p><strong>Receipt Cut &amp; Stack</strong><small>Creates 0001 · 0035 · 0069 for a 1–100 sequence.</small></p></div>
               <button onClick={applyThreeUpCutStackPreset} disabled={numberItems.length < 3}>{numberItems.length > 3 ? `Apply & remove ${numberItems.length - 3} extra` : 'Apply setup'}</button>
-            </div>
+            </div>}
             {numberArrangement === 'same-number' && (
               <div className="linked-number-notice">
                 <span>⌁</span>
                 <div><strong>Positions are linked</strong><small>Every position prints the same number. The sequence advances once per sheet.</small></div>
               </div>
             )}
-            {(numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && (
+            {(numberArrangement === 'custom-pattern' || (linkedCopiesEnabled && showConnectionEditor)) && (
               <div className="custom-pattern-editor">
                 <div className="custom-pattern-help"><strong>Connection patterns</strong><small>Rename, add, remove, and assign any number position.</small></div>
                 <div className="pattern-definition-list">
@@ -1170,7 +1414,7 @@ export function Editor() {
                 <div className="custom-pattern-example">Sheet {safePreviewSheet + 1}: {previewSheetNumbers.filter(Boolean).join(' · ') || 'No numbers'}</div>
               </div>
             )}
-            {(numberArrangement === 'cut-stack' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && (
+            {(numberArrangement === 'cut-stack' || (linkedCopiesEnabled && showLinkSummary)) && (
               <div className="cut-stack-ranges">
                 {positionRanges.map((range, index) => <div key={numberItems[index].id}><span>Position {index + 1}</span><strong>{range}</strong></div>)}
               </div>
@@ -1387,6 +1631,7 @@ export function Editor() {
             </div>
           </div>
         </aside>
+        {!leftPanelCollapsed && <div className="panel-resize-handle left" onMouseDown={(event) => startPanelResize('left', event)} title={workspaceLocked ? 'Unlock workspace to resize' : 'Drag to resize left panel'} />}
 
         {/* Center — Canvas Editor */}
         <div
@@ -1399,23 +1644,25 @@ export function Editor() {
             <>
               <div className="canvas-ruler-corner" title="Ruler origin" />
               <div className="canvas-ruler canvas-ruler-top" onMouseDown={(event) => startGuideFromRuler(event, 'y')} title="Drag down to add a horizontal guide">
-                {canvasSize && Array.from({ length: Math.floor(canvasSize.width / 50) + 1 }, (_, index) => index * 50).map((value) => (
-                  <span key={value} className={value % 100 === 0 ? 'major' : 'minor'} style={{ left: `${rulerOrigin.x + value * (previewZoom / 100)}px` }}>{value % 100 === 0 ? value : ''}</span>
+                {canvasSize && Array.from({ length: Math.floor(canvasSize.width / (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)) + 1 }, (_, index) => index * (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)).map((value) => (
+                  <span key={value} data-label={value % 100 === 0 ? value : undefined} className={value % 100 === 0 ? 'major' : value % 50 === 0 ? 'mid' : 'minor'} style={{ left: `${rulerOrigin.x - CANVAS_RULER_SIZE + value * (previewZoom / 100)}px` }} />
                 ))}
               </div>
               <div className="canvas-ruler canvas-ruler-left" onMouseDown={(event) => startGuideFromRuler(event, 'x')} title="Drag right to add a vertical guide">
-                {canvasSize && Array.from({ length: Math.floor(canvasSize.height / 50) + 1 }, (_, index) => index * 50).map((value) => (
-                  <span key={value} className={value % 100 === 0 ? 'major' : 'minor'} style={{ top: `${rulerOrigin.y + value * (previewZoom / 100)}px` }}>{value % 100 === 0 ? value : ''}</span>
+                {canvasSize && Array.from({ length: Math.floor(canvasSize.height / (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)) + 1 }, (_, index) => index * (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)).map((value) => (
+                  <span key={value} data-label={value % 100 === 0 ? value : undefined} className={value % 100 === 0 ? 'major' : value % 50 === 0 ? 'mid' : 'minor'} style={{ top: `${rulerOrigin.y - CANVAS_RULER_SIZE + value * (previewZoom / 100)}px` }} />
                 ))}
               </div>
             </>
           )}
           {currentAsset ? (
             <div
+              ref={canvasZoomStageRef}
               className="canvas-zoom-stage"
               style={{
                 width: canvasSize ? `${canvasSize.width * (previewZoom / 100)}px` : '600px',
                 height: canvasSize ? `${canvasSize.height * (previewZoom / 100)}px` : '400px',
+                transform: `translate(${canvasPan.x}px, ${canvasPan.y}px)`,
               }}
             >
             <div
@@ -1616,17 +1863,23 @@ export function Editor() {
           {currentAsset && (
             <div className="canvas-zoom-indicator">Preview {previewZoom}%</div>
           )}
-          {currentAsset && exportPageCount > 0 && (
+          {currentAsset && exportPageCount > 0 && showSheetPreview && (
             <div className="sheet-preview-nav">
               <button onClick={() => setPreviewSheet((page) => Math.max(0, page - 1))} disabled={safePreviewSheet === 0}>‹</button>
               <div><span>Sheet preview</span><strong>{safePreviewSheet + 1} / {exportPageCount}</strong></div>
               <button onClick={() => setPreviewSheet((page) => Math.min(exportPageCount - 1, page + 1))} disabled={safePreviewSheet >= exportPageCount - 1}>›</button>
+              <button className="sheet-preview-close" onClick={() => setShowSheetPreview(false)} title="Close Sheet Preview" aria-label="Close Sheet Preview">×</button>
             </div>
           )}
         </div>
 
         {/* Right Panel — Properties & Numbering Setup */}
-        <aside className="editor-panel-right">
+        {!rightPanelCollapsed && <div className="panel-resize-handle right" onMouseDown={(event) => startPanelResize('right', event)} title={workspaceLocked ? 'Unlock workspace to resize' : 'Drag to resize right panel'} />}
+        <aside className={`editor-panel-right ${rightPanelCollapsed ? 'panel-collapsed' : ''}`} style={{ width: rightPanelCollapsed ? 34 : rightPanelWidth }}>
+          <div className="panel-dock-controls right">
+            <button onClick={() => !workspaceLocked && setRightPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={rightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}>{rightPanelCollapsed ? '‹' : '›'}</button>
+            {!rightPanelCollapsed && <span>Properties</span>}
+          </div>
           <NumberingPanel
             projectId={activeProject.id}
             numberSettings={numberSettings}

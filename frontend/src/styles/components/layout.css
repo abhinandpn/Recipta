@@ -15,6 +15,7 @@
 /* ─── Toolbar ─── */
 
 .app-toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   height: var(--toolbar-height);
@@ -120,9 +121,97 @@
   border: 1px solid var(--color-surface-border);
   border-radius: var(--radius-full);
   font-size: var(--text-xs);
+}
+
+.toolbar-project-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.toolbar-project-copy strong,
+.toolbar-project-copy small {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.toolbar-project-copy strong { color: var(--color-text-primary); font-size: 11px; font-weight: 600; }
+.toolbar-project-copy small { margin-top: 2px; color: var(--color-text-muted); font-size: 8px; }
+
+.toolbar-center-meta {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 36vw;
+  transform: translate(-50%, -50%);
+}
+
+.toolbar-project-name {
+  overflow: hidden;
+  color: #e2e2e2;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-right-meta {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 12px;
+}
+
+.toolbar-project-type {
+  max-width: 190px;
+  padding: 4px 8px;
+  overflow: hidden;
+  color: #aaa;
+  background: #303030;
+  border: 1px solid #454545;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: .02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-header-action {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 9px;
+  color: #bdbdbd;
+  background: #303030;
+  border: 1px solid #484848;
+  border-radius: 3px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.toolbar-header-action:hover { color: #fff; background: #3a4c57; border-color: #5f9fc7; }
+
+.toolbar-fullscreen-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 27px;
+  flex: 0 0 auto;
+  color: #bdbdbd;
+  background: #303030;
+  border: 1px solid #484848;
+  border-radius: 3px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.toolbar-fullscreen-button:hover, .toolbar-fullscreen-button.active { color: white; background: #3a4c57; border-color: #5f9fc7; }
 
 .toolbar-project-dot {
   width: 6px;
@@ -196,8 +285,16 @@
 .toolbar-nav-item:hover { color: white; background: #303030; }
 .toolbar-nav-item.active { position: relative; color: white; background: #303030; border: 0; box-shadow: none; }
 .toolbar-nav-item.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; background: #4d8fb9; }
-.toolbar-project-chip { color: #bdbdbd; background: #303030; border-color: #484848; border-radius: 3px; }
+.toolbar-project-chip { min-width: 120px; max-width: 240px; padding: 5px 9px; color: #bdbdbd; background: #303030; border-color: #484848; border-radius: 3px; }
 .toolbar-project-dot { background: #5f9fc7; box-shadow: none; }
 .toolbar-version { color: #777; }
 .app-statusbar { height: 24px; background: #252525; border-top-color: #111; box-shadow: 0 -1px #3a3a3a; }
 .statusbar-dot { width: 5px; height: 5px; box-shadow: none; animation: none; }
+
+@media (max-width: 760px) {
+  .toolbar-header-action span { display: none; }
+  .toolbar-header-action { width: 28px; padding: 0; justify-content: center; }
+  .toolbar-center-meta { max-width: 30vw; }
+  .toolbar-project-type { display: none; }
+  .toolbar-right-meta { gap: 6px; }
+}

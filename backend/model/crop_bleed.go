@@ -6,7 +6,7 @@ type CropBleedSettings struct {
 	ProjectID        string  `json:"projectId"`
 	CropMarksEnabled bool    `json:"cropMarksEnabled"`
 	BleedEnabled     bool    `json:"bleedEnabled"`
-	BleedSize        float64 `json:"bleedSize"`       // mm
-	CropMarkLength   float64 `json:"cropMarkLength"`  // mm
-	CropMarkOffset   float64 `json:"cropMarkOffset"`  // mm
+	BleedSize        float64 `json:"bleedSize"`      // mm
+	CropMarkLength   float64 `json:"cropMarkLength"` // mm
+	CropMarkOffset   float64 `json:"cropMarkOffset"` // mm
 }

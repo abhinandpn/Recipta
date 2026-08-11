@@ -2,6 +2,25 @@ import React, { useState, useEffect } from 'react';
 import type { NumberSettings, ManualNumber, NumberItem, ValidationResult } from '../../types';
 import * as api from '../../services/api';
 
+const BASIC_FONTS = [
+  'Inter',
+  'JetBrains Mono',
+  'Arial',
+  'Arial Black',
+  'Calibri',
+  'Segoe UI',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Georgia',
+  'Times New Roman',
+  'Courier New',
+  'Century Gothic',
+  'Palatino Linotype',
+  'Lucida Console',
+  'Impact',
+];
+
 interface NumberingPanelProps {
   projectId: string;
   numberSettings: NumberSettings | null;
@@ -37,6 +56,9 @@ export function NumberingPanel({
   const [padding, setPadding] = useState(numberSettings?.padding ?? 4);
   const [prefix, setPrefix] = useState(numberSettings?.prefix || '');
   const [suffix, setSuffix] = useState(numberSettings?.suffix || '');
+  const [showAffixes, setShowAffixes] = useState(Boolean(numberSettings?.prefix || numberSettings?.suffix));
+  const [fontMenuOpen, setFontMenuOpen] = useState(false);
+  const fontMenuRef = React.useRef<HTMLDivElement>(null);
 
   // Local state for manual numbers text
   const [manualText, setManualText] = useState(
@@ -135,6 +157,15 @@ export function NumberingPanel({
     onItemChange(selectedIndex, updatedItem);
   }, [sampleNumber, posX, posY, rotation, fontFamily, fontSize, fontStyle, fontColor, alignment]);
 
+  useEffect(() => {
+    if (!fontMenuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!fontMenuRef.current?.contains(event.target as Node)) setFontMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeMenu);
+    return () => document.removeEventListener('mousedown', closeMenu);
+  }, [fontMenuOpen]);
+
   // Handle manual text change & validation
   const handleManualTextChange = async (text: string) => {
     setManualText(text);
@@ -159,6 +190,30 @@ export function NumberingPanel({
 
   return (
     <div className="numbering-panel">
+      {/* Frequently used position controls stay at the top for quick access. */}
+      <div className="panel-section">
+        <div className="panel-section-title">Position & Rotation (#{selectedIndex + 1})</div>
+        <div className="panel-row">
+          <span className="panel-label">X Offset</span>
+          <input type="number" className="panel-input-small" value={Math.round(posX)} onChange={(e) => setPosX(Number(e.target.value))} />
+          <span className="panel-label" style={{ minWidth: '45px', textAlign: 'right' }}>Y Offset</span>
+          <input type="number" className="panel-input-small" value={Math.round(posY)} onChange={(e) => setPosY(Number(e.target.value))} />
+        </div>
+        <div className="panel-row" style={{ marginTop: '8px' }}>
+          <span className="panel-label">Rotation</span>
+          <input type="number" className="panel-input-small" value={rotation} onChange={(e) => setRotation(Number(e.target.value))} />
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>degrees (°)</span>
+        </div>
+        <div className="panel-row" style={{ marginTop: '6px' }}>
+          <span className="panel-label">Presets</span>
+          <div className="editor-tab-group" style={{ flex: 1 }}>
+            {[0, 90, 180, 270].map((value) => (
+              <button key={value} className={`editor-tab ${(rotation === value || (value === 270 && rotation === -90)) ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setRotation(value)}>{value}°</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Multiple Number Positions Manager */}
       <div className="panel-section">
         <div className="panel-section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -277,27 +332,24 @@ export function NumberingPanel({
             />
           </div>
 
-          <div className="panel-row">
-            <span className="panel-label">Prefix</span>
-            <input
-              type="text"
-              className="panel-input"
-              placeholder="e.g. GC-"
-              value={prefix}
-              onChange={(e) => setPrefix(e.target.value)}
-            />
-          </div>
+          <button className={`sequence-optional-toggle ${showAffixes ? 'open' : ''}`} onClick={() => setShowAffixes((visible) => !visible)} aria-expanded={showAffixes}>
+            <span>{showAffixes ? '▾' : '▸'} Optional Prefix &amp; Suffix</span>
+            <small>{prefix || suffix ? `${prefix || '—'} 0001 ${suffix || '—'}` : 'Not used'}</small>
+          </button>
 
-          <div className="panel-row">
-            <span className="panel-label">Suffix</span>
-            <input
-              type="text"
-              className="panel-input"
-              placeholder="e.g. /24"
-              value={suffix}
-              onChange={(e) => setSuffix(e.target.value)}
-            />
-          </div>
+          {showAffixes && (
+            <div className="sequence-optional-fields">
+              <div className="panel-row">
+                <span className="panel-label">Prefix</span>
+                <input type="text" className="panel-input" placeholder="e.g. GC-" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+              </div>
+              <div className="panel-row">
+                <span className="panel-label">Suffix</span>
+                <input type="text" className="panel-input" placeholder="e.g. /24" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
+              </div>
+              {(prefix || suffix) && <button className="sequence-affix-clear" onClick={() => { setPrefix(''); setSuffix(''); }}>Clear prefix and suffix</button>}
+            </div>
+          )}
 
           {/* Sample Preview */}
           <div style={{ marginTop: '12px', background: 'var(--color-bg-primary)', padding: '8px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-surface-border)' }}>
@@ -362,19 +414,21 @@ export function NumberingPanel({
 
         <div className="panel-row">
           <span className="panel-label">Font</span>
-          <select
-            className="panel-input"
-            value={fontFamily}
-            onChange={(e) => setFontFamily(e.target.value)}
-          >
-            <option value="Inter">Inter</option>
-            <option value="JetBrains Mono">JetBrains Mono</option>
-            <option value="Arial">Arial</option>
-            <option value="Times New Roman">Times New Roman</option>
-            <option value="Courier New">Courier New</option>
-            <option value="Georgia">Georgia</option>
-            <option value="Impact">Impact</option>
-          </select>
+          <div className="font-picker" ref={fontMenuRef}>
+            <button className="font-picker-trigger" onClick={() => setFontMenuOpen((open) => !open)} aria-expanded={fontMenuOpen} aria-haspopup="listbox">
+              <span>{fontFamily}</span><strong style={{ fontFamily }}>Aa 123</strong><i>{fontMenuOpen ? '▴' : '▾'}</i>
+            </button>
+            {fontMenuOpen && (
+              <div className="font-picker-menu" role="listbox" aria-label="Choose font">
+                {BASIC_FONTS.map((font) => (
+                  <button key={font} className={fontFamily === font ? 'selected' : ''} onClick={() => { setFontFamily(font); setFontMenuOpen(false); }} role="option" aria-selected={fontFamily === font}>
+                    <span><b>{fontFamily === font ? '✓' : ''}</b>{font}</span>
+                    <strong style={{ fontFamily: font }}>Aa 123</strong>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="panel-row">
@@ -438,75 +492,6 @@ export function NumberingPanel({
         </div>
       </div>
 
-      {/* Position & Rotation Controls for Active Item */}
-      <div className="panel-section">
-        <div className="panel-section-title">
-          Position & Rotation (#{selectedIndex + 1})
-        </div>
-
-        <div className="panel-row">
-          <span className="panel-label">X Offset</span>
-          <input
-            type="number"
-            className="panel-input-small"
-            value={Math.round(posX)}
-            onChange={(e) => setPosX(Number(e.target.value))}
-          />
-          <span className="panel-label" style={{ minWidth: '45px', textAlign: 'right' }}>Y Offset</span>
-          <input
-            type="number"
-            className="panel-input-small"
-            value={Math.round(posY)}
-            onChange={(e) => setPosY(Number(e.target.value))}
-          />
-        </div>
-
-        {/* Rotation Slider & Presets */}
-        <div className="panel-row" style={{ marginTop: '8px' }}>
-          <span className="panel-label">Rotation</span>
-          <input
-            type="number"
-            className="panel-input-small"
-            value={rotation}
-            onChange={(e) => setRotation(Number(e.target.value))}
-          />
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>degrees (°)</span>
-        </div>
-
-        <div className="panel-row" style={{ marginTop: '6px' }}>
-          <span className="panel-label">Presets</span>
-          <div className="editor-tab-group" style={{ flex: 1 }}>
-            <button
-              className={`editor-tab ${rotation === 0 ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setRotation(0)}
-            >
-              0°
-            </button>
-            <button
-              className={`editor-tab ${rotation === 90 ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setRotation(90)}
-            >
-              90°
-            </button>
-            <button
-              className={`editor-tab ${rotation === 180 ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setRotation(180)}
-            >
-              180°
-            </button>
-            <button
-              className={`editor-tab ${rotation === 270 || rotation === -90 ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setRotation(270)}
-            >
-              270°
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
