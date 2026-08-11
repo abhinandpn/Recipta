@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import * as api from '../services/api';
-import type { Project, ProjectType } from '../types';
+import type { Project } from '../types';
 import '../styles/components/dashboard.css';
 
 export function Dashboard() {
@@ -16,7 +16,6 @@ export function Dashboard() {
 
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
-  const [newProjectType, setNewProjectType] = useState<ProjectType>('receipt');
 
   // Load projects on mount
   useEffect(() => {
@@ -45,7 +44,7 @@ export function Dashboard() {
 
     try {
       setIsLoading(true);
-      const project = await api.createProject(newProjectName.trim(), newProjectType);
+      const project = await api.createProject(newProjectName.trim(), 'receipt');
       setShowNewDialog(false);
       setNewProjectName('');
 
@@ -58,7 +57,7 @@ export function Dashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [newProjectName, newProjectType]);
+  }, [newProjectName]);
 
   const handleOpenProject = useCallback(async (project: Project) => {
     try {
@@ -114,29 +113,13 @@ export function Dashboard() {
         <div
           className="dashboard-action-card"
           onClick={() => {
-            setNewProjectType('receipt');
             setShowNewDialog(true);
           }}
         >
           <div className="dashboard-action-icon receipt">📋</div>
-          <span className="dashboard-action-title">New Receipt / Coupon</span>
+          <span className="dashboard-action-title">New Project</span>
           <span className="dashboard-action-desc">
             Receipts, gift coupons, vouchers, tickets
-          </span>
-          <span className="dashboard-action-link">Create project <b>→</b></span>
-        </div>
-
-        <div
-          className="dashboard-action-card"
-          onClick={() => {
-            setNewProjectType('foil');
-            setShowNewDialog(true);
-          }}
-        >
-          <div className="dashboard-action-icon foil">✨</div>
-          <span className="dashboard-action-title">New Foil / Emboss</span>
-          <span className="dashboard-action-desc">
-            Foil stamping, embossing, hot-stamp layouts
           </span>
           <span className="dashboard-action-link">Create project <b>→</b></span>
         </div>
@@ -258,28 +241,6 @@ export function Dashboard() {
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateProject()}
                 autoFocus
               />
-            </div>
-
-            <div className="dialog-field">
-              <label className="dialog-label">Project Type</label>
-              <div className="dialog-type-selector">
-                <div
-                  className={`dialog-type-option ${newProjectType === 'receipt' ? 'selected' : ''}`}
-                  onClick={() => setNewProjectType('receipt')}
-                >
-                  <span style={{ fontSize: '24px' }}>📋</span>
-                  <span className="dialog-type-option-label">Receipt / Coupon</span>
-                  <span className="dialog-type-option-desc">Receipts, coupons, vouchers, tickets</span>
-                </div>
-                <div
-                  className={`dialog-type-option ${newProjectType === 'foil' ? 'selected' : ''}`}
-                  onClick={() => setNewProjectType('foil')}
-                >
-                  <span style={{ fontSize: '24px' }}>✨</span>
-                  <span className="dialog-type-option-label">Foil / Emboss</span>
-                  <span className="dialog-type-option-desc">Foil stamping, embossing, hot-stamp</span>
-                </div>
-              </div>
             </div>
 
             <div className="dialog-actions">

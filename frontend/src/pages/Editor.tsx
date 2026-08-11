@@ -1,10 +1,12 @@
 import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useAppStore } from '../store/appStore';
 import { NumberingPanel } from '../components/panels/NumberingPanel';
 import * as api from '../services/api';
 import { generateNumberedPdf } from '../services/pdfExport';
+import { createNumberLayoutPlan } from '../services/numberLayout';
 import { toggleAppFullscreen } from '../services/fullscreen';
-import type { Asset, NumberSettings, ManualNumber, NumberItem } from '../types';
+import type { Asset, NumberSettings, NumberItem } from '../types';
 import '../styles/components/editor.css';
 
 interface LayerGroup {
@@ -100,17 +102,16 @@ function getNumberBoxEdgeAnchor(item: NumberItem, target: { x: number; y: number
 }
 
 export function Editor() {
-  const { activeProject, activeProjectFull, editorTab, setEditorTab, setError, setIsLoading } = useAppStore();
+  const { activeProject, activeProjectFull, setError, setIsLoading } = useAppStore();
 
   const [currentAsset, setCurrentAsset] = useState<Asset | null>(
     activeProjectFull?.assets?.[0] || null
   );
 
   const [numberSettings, setNumberSettings] = useState<NumberSettings | null>(
-    activeProjectFull?.numberSettings || null
-  );
-  const [manualNumbers, setManualNumbers] = useState<ManualNumber[]>(
-    activeProjectFull?.manualNumbers || []
+    activeProjectFull?.numberSettings
+      ? { ...activeProjectFull.numberSettings, mode: 'auto' }
+      : null
   );
 
   // Multiple number overlay positions list
@@ -159,8 +160,11 @@ export function Editor() {
   const [showNumberFlow, setShowNumberFlow] = useState(false);
   const [showConnectionEditor, setShowConnectionEditor] = useState(false);
   const [showLinkSummary, setShowLinkSummary] = useState(() => localStorage.getItem(LINK_SUMMARY_KEY) === 'true');
+  const [showAdvancedFlow, setShowAdvancedFlow] = useState(false);
+  const [numberFlowTarget, setNumberFlowTarget] = useState<HTMLDivElement | null>(null);
+  const [numberPositionsTarget, setNumberPositionsTarget] = useState<HTMLDivElement | null>(null);
   const [previewSheet, setPreviewSheet] = useState(0);
-  const [showSheetPreview, setShowSheetPreview] = useState(false);
+  const showSheetPreview = true;
   const [numberArrangement, setNumberArrangement] = useState<'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern' | 'linked-cut-stack' | 'linked-across-sheet'>('cut-stack');
   const [patternGroups, setPatternGroups] = useState<Record<string, string>>(() => Object.fromEntries(defaultItems.map((item, index) => [item.id, String(index + 1)])));
   const [patternDefinitions, setPatternDefinitions] = useState<PatternDefinition[]>(() => defaultItems.map((_, index) => ({ id: String(index + 1), name: `Pattern ${String.fromCharCode(65 + index)}`, color: PATTERN_COLORS[index % PATTERN_COLORS.length] })));
@@ -175,12 +179,13 @@ export function Editor() {
   const undoStack = useRef<EditorHistorySnapshot[]>([]);
   const redoStack = useRef<EditorHistorySnapshot[]>([]);
   const shortcutHandlerRef = useRef<(event: KeyboardEvent) => void>(() => undefined);
+  const gridMenuRef = useRef<HTMLDivElement>(null);
   const settingsSaveTimer = useRef<number | null>(null);
-  const manualNumbersSaveTimer = useRef<number | null>(null);
   const assetLoadRequestId = useRef(0);
 
   // Grid, snapping, and preview controls are editor-only aids.
   const [showGrid, setShowGrid] = useState(false);
+  const [showGridMenu, setShowGridMenu] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
   const [gridX, setGridX] = useState(20);
   const [gridY, setGridY] = useState(20);
@@ -282,11 +287,14 @@ export function Editor() {
   React.useEffect(() => {
     const openShortcuts = () => setShowShortcutsDialog(true);
     const resetLayout = () => resetWorkspaceLayout();
+    const toggleGridMenu = () => setShowGridMenu((open) => !open);
     window.addEventListener('recipta:show-shortcuts', openShortcuts);
     window.addEventListener('recipta:reset-layout', resetLayout);
+    window.addEventListener('recipta:toggle-grid-menu', toggleGridMenu);
     return () => {
       window.removeEventListener('recipta:show-shortcuts', openShortcuts);
       window.removeEventListener('recipta:reset-layout', resetLayout);
+      window.removeEventListener('recipta:toggle-grid-menu', toggleGridMenu);
     };
   }, []);
 
@@ -421,8 +429,16 @@ export function Editor() {
     if (numberDragFrame.current !== null) cancelAnimationFrame(numberDragFrame.current);
     if (panFrame.current !== null) cancelAnimationFrame(panFrame.current);
     if (settingsSaveTimer.current !== null) window.clearTimeout(settingsSaveTimer.current);
-    if (manualNumbersSaveTimer.current !== null) window.clearTimeout(manualNumbersSaveTimer.current);
   }, []);
+
+  React.useEffect(() => {
+    if (!showGridMenu) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!gridMenuRef.current?.contains(event.target as Node)) setShowGridMenu(false);
+    };
+    document.addEventListener('mousedown', closeMenu);
+    return () => document.removeEventListener('mousedown', closeMenu);
+  }, [showGridMenu]);
 
   if (!activeProject) {
     return (
@@ -464,6 +480,10 @@ export function Editor() {
   const handleMouseDown = (e: React.MouseEvent, index: number) => {
     if (panMode || spacePressed || e.button === 1) return;
     e.stopPropagation();
+    if (e.altKey) {
+      duplicateNumberPosition(index, { x: e.clientX, y: e.clientY });
+      return;
+    }
     captureUndoState();
     setSelectedIndex(index);
     setDraggingIdx(index);
@@ -683,6 +703,50 @@ export function Editor() {
     setActiveGroupId(null);
   };
 
+  const setReceiptsPerSheet = (requestedCount: number) => {
+    const targetCount = Math.max(1, Math.min(100, Math.round(requestedCount)));
+    const itemGroupKeys = numberItems.map((item, index) => patternGroups[item.id] || String(index + 1));
+    const currentGroupKeys = [...new Set(itemGroupKeys)];
+    if (targetCount === currentGroupKeys.length) return;
+    captureUndoState();
+
+    if (targetCount < currentGroupKeys.length) {
+      const retainedGroupKeys = new Set(currentGroupKeys.slice(0, targetCount));
+      const retained = numberItems.filter((item, index) => retainedGroupKeys.has(itemGroupKeys[index])).map((item, index) => ({ ...item, itemIndex: index }));
+      const retainedIds = new Set(retained.map((item) => item.id));
+      setNumberItems(retained);
+      setSelectedIndex((index) => Math.min(index, retained.length - 1));
+      setSelectedLayerIds((ids) => ids.filter((id) => retainedIds.has(id)));
+      setLayerGroups((groups) => groups
+        .map((group) => ({ ...group, itemIds: group.itemIds.filter((id) => retainedIds.has(id)) }))
+        .filter((group) => group.itemIds.length > 1));
+      setPatternGroups((groups) => Object.fromEntries(Object.entries(groups).filter(([id]) => retainedIds.has(id))));
+      setPatternDefinitions((definitions) => definitions.slice(0, Math.max(1, retained.length)));
+      setPreviewSheet(0);
+      return;
+    }
+
+    const lastItem = numberItems[numberItems.length - 1];
+    const timestamp = Date.now();
+    const additions = Array.from({ length: targetCount - currentGroupKeys.length }, (_, offset) => {
+      const itemIndex = numberItems.length + offset;
+      return {
+        ...lastItem,
+        id: `ni_${timestamp}_${itemIndex}`,
+        itemIndex,
+        x: Math.max(0, lastItem.x),
+        y: Math.max(0, lastItem.y + ((offset + 1) * Math.max(lastItem.height + 32, 70))),
+      };
+    });
+    setNumberItems((items) => [...items, ...additions]);
+    setPatternGroups((groups) => ({ ...groups, ...Object.fromEntries(additions.map((item, offset) => [item.id, `receipt_${timestamp}_${currentGroupKeys.length + offset + 1}`])) }));
+    setPatternDefinitions((definitions) => [
+      ...definitions,
+      ...additions.map((_, offset) => ({ id: `receipt_${timestamp}_${currentGroupKeys.length + offset + 1}`, name: `Receipt ${currentGroupKeys.length + offset + 1}`, color: PATTERN_COLORS[(currentGroupKeys.length + offset) % PATTERN_COLORS.length] })),
+    ]);
+    setPreviewSheet(0);
+  };
+
   const addPatternDefinition = () => {
     captureUndoState();
     const id = `pattern_${Date.now()}`;
@@ -851,9 +915,6 @@ export function Editor() {
 
   // Sample number value calculation
   const getSampleNumberValue = () => {
-    if (numberSettings?.mode === 'manual' && manualNumbers.length > 0) {
-      return manualNumbers[0].numberValue || '0001';
-    }
     const prefix = numberSettings?.prefix || '';
     const suffix = numberSettings?.suffix || '';
     const start = numberSettings?.startNumber ?? 1;
@@ -992,6 +1053,40 @@ export function Editor() {
     setSelectedLayerIds(duplicates.map((item) => item.id));
   };
 
+  const duplicateNumberPosition = (sourceIndex: number, dragPoint?: { x: number; y: number }) => {
+    const source = numberItems[sourceIndex];
+    if (!source) return;
+    captureUndoState();
+    const duplicateIndex = numberItems.length;
+    const duplicate: NumberItem = {
+      ...source,
+      id: `ni_${Date.now()}_duplicate_${duplicateIndex}`,
+      itemIndex: duplicateIndex,
+      x: source.x + (dragPoint ? 0 : 12),
+      y: source.y + (dragPoint ? 0 : 12),
+    };
+    const sourceGroupId = patternGroups[source.id] || String(sourceIndex + 1);
+    setNumberItems((items) => [...items, duplicate]);
+    setPatternGroups((groups) => ({ ...groups, [source.id]: sourceGroupId, [duplicate.id]: sourceGroupId }));
+    setNumberArrangement(numberArrangement === 'across-sheet' || numberArrangement === 'linked-across-sheet' ? 'linked-across-sheet' : 'linked-cut-stack');
+    setSelectedIndex(duplicateIndex);
+    setSelectedLayerIds([duplicate.id]);
+    setActiveGroupId(null);
+    if (dragPoint) {
+      setDraggingIdx(duplicateIndex);
+      dragStart.current = { x: dragPoint.x, y: dragPoint.y, initialX: source.x, initialY: source.y };
+      pendingDragPositions.current = {};
+    }
+  };
+
+  const linkNumberPositionToSelected = (targetIndex: number) => {
+    const source = numberItems[selectedIndex];
+    const target = numberItems[targetIndex];
+    if (!source || !target || source.id === target.id) return;
+    connectNumberPositions(source.id, target.id);
+    setNumberArrangement(numberArrangement === 'across-sheet' || numberArrangement === 'linked-across-sheet' ? 'linked-across-sheet' : 'linked-cut-stack');
+  };
+
   const nudgeSelectedNumbers = (dx: number, dy: number) => {
     const ids = selectedLayerIds.length ? selectedLayerIds : [numberItems[selectedIndex]?.id].filter(Boolean) as string[];
     if (!ids.length) return;
@@ -1047,7 +1142,6 @@ export function Editor() {
   };
 
   const exportNumbers = (() => {
-    if (numberSettings?.mode === 'manual') return manualNumbers.map((item) => item.numberValue).filter(Boolean);
     const start = numberSettings?.startNumber ?? 1;
     const end = numberSettings?.endNumber ?? 100;
     const stepValue = Math.max(1, numberSettings?.step ?? 1);
@@ -1059,26 +1153,18 @@ export function Editor() {
     return values;
   })();
   const customPatternKeys = numberItems.map((item, index) => patternGroups[item.id] || String(index + 1));
-  const uniquePatternKeys = [...new Set(customPatternKeys)];
-  const exportPageCount = numberArrangement === 'same-number'
-    ? exportNumbers.length
-    : Math.ceil(exportNumbers.length / Math.max(1, numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet' ? uniquePatternKeys.length : numberItems.length));
+  const numberLayout = createNumberLayoutPlan(exportNumbers.length, numberItems.length, numberArrangement, customPatternKeys);
+  const uniquePatternKeys = numberLayout.groupKeys;
+  const exportPageCount = numberLayout.pageCount;
   const safePreviewSheet = Math.min(Math.max(0, previewSheet), Math.max(0, exportPageCount - 1));
   const previewSheetNumbers = numberItems.map((_, index) => {
-    const patternIndex = uniquePatternKeys.indexOf(customPatternKeys[index]);
-    const numberIndex = numberArrangement === 'same-number'
-      ? safePreviewSheet
-      : numberArrangement === 'custom-pattern'
-        ? safePreviewSheet * uniquePatternKeys.length + patternIndex
-      : numberArrangement === 'linked-across-sheet'
-        ? safePreviewSheet * uniquePatternKeys.length + patternIndex
-      : numberArrangement === 'linked-cut-stack'
-        ? safePreviewSheet + patternIndex * exportPageCount
-      : numberArrangement === 'cut-stack'
-        ? safePreviewSheet + index * exportPageCount
-        : safePreviewSheet * numberItems.length + index;
+    const numberIndex = numberLayout.numberIndexFor(safePreviewSheet, index);
     return exportNumbers[numberIndex] ?? '';
   });
+  const positionNumberIndexes = numberItems.map((_, index) => Array.from(
+    { length: exportPageCount },
+    (_, pageIndex) => numberLayout.numberIndexFor(pageIndex, index),
+  ).filter((numberIndex) => numberIndex >= 0 && numberIndex < exportNumbers.length));
   const positionRanges = numberItems.map((_, index) => {
     const patternIndex = uniquePatternKeys.indexOf(customPatternKeys[index]);
     if (!exportNumbers.length) return 'Empty';
@@ -1092,14 +1178,12 @@ export function Editor() {
       return `Linked across sheet · group ${patternIndex + 1}`;
     }
     if (numberArrangement === 'linked-cut-stack') {
-      const rangeStart = patternIndex * exportPageCount;
-      const rangeEnd = Math.min(exportNumbers.length - 1, rangeStart + exportPageCount - 1);
-      return rangeStart < exportNumbers.length ? `Linked · ${exportNumbers[rangeStart]}–${exportNumbers[rangeEnd]}` : 'Empty';
+      const indexes = positionNumberIndexes[index];
+      return indexes.length ? `Linked · ${exportNumbers[indexes[0]]}–${exportNumbers[indexes[indexes.length - 1]]}` : 'Empty';
     }
     if (numberArrangement === 'cut-stack') {
-      const rangeStart = index * exportPageCount;
-      const rangeEnd = Math.min(exportNumbers.length - 1, rangeStart + exportPageCount - 1);
-      return rangeStart < exportNumbers.length ? `${exportNumbers[rangeStart]}–${exportNumbers[rangeEnd]}` : 'Empty';
+      const indexes = positionNumberIndexes[index];
+      return indexes.length ? `${exportNumbers[indexes[0]]}–${exportNumbers[indexes[indexes.length - 1]]}` : 'Empty';
     }
     return `Step ${index + 1} on every sheet`;
   });
@@ -1171,69 +1255,83 @@ export function Editor() {
     setPreviewSheet(0);
   };
 
+  const handleNumberItemChange = (idx: number, updatedItem: NumberItem) => {
+    const currentItem = numberItems[idx];
+    if (currentItem && currentItem.numberValue === updatedItem.numberValue && currentItem.x === updatedItem.x && currentItem.y === updatedItem.y && currentItem.rotation === updatedItem.rotation && currentItem.fontFamily === updatedItem.fontFamily && currentItem.fontSize === updatedItem.fontSize && currentItem.fontStyle === updatedItem.fontStyle && currentItem.fontColor === updatedItem.fontColor && currentItem.alignment === updatedItem.alignment) return;
+    captureUndoState();
+    setNumberItems((prev) => {
+      const previousItem = prev[idx];
+      const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(updatedItem.id));
+      if (!activeGroup || !previousItem) {
+        return prev.map((item, index) => index === idx ? updatedItem : item);
+      }
+      const dx = updatedItem.x - previousItem.x;
+      const dy = updatedItem.y - previousItem.y;
+      return prev.map((item, index) => {
+        if (!activeGroup.itemIds.includes(item.id)) return item;
+        if (index === idx) return updatedItem;
+        return {
+          ...item,
+          x: Math.max(0, item.x + dx),
+          y: Math.max(0, item.y + dy),
+          rotation: updatedItem.rotation,
+          fontFamily: updatedItem.fontFamily,
+          fontSize: updatedItem.fontSize,
+          fontStyle: updatedItem.fontStyle,
+          fontColor: updatedItem.fontColor,
+          alignment: updatedItem.alignment,
+        };
+      });
+    });
+  };
+
+  const selectedNumberItem = numberItems[selectedIndex];
+  const updateSelectedNumberPosition = (changes: Partial<Pick<NumberItem, 'x' | 'y' | 'rotation'>>) => {
+    if (!selectedNumberItem) return;
+    handleNumberItemChange(selectedIndex, { ...selectedNumberItem, ...changes });
+  };
+
   return (
     <div className="editor" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-      {/* Editor Toolbar — Tab Switcher */}
+      {/* Editor Toolbar */}
       <div className="editor-toolbar">
-        <div className="editor-tab-group">
+        <div className="header-grid-menu" ref={gridMenuRef}>
           <button
-            className={`editor-tab ${editorTab === 'receipt' ? 'active' : ''}`}
-            onClick={() => setEditorTab('receipt')}
+            className={`btn btn-ghost btn-sm editor-grid-trigger ${(showGrid || showGridMenu) ? 'toolbar-control-active' : ''}`}
+            onClick={() => setShowGridMenu((open) => !open)}
+            aria-expanded={showGridMenu}
+            aria-haspopup="dialog"
+            title="Grid, snapping, and ruler guide settings"
           >
-            Receipt / Coupon
+            ▦ Grid {showGrid ? 'On' : 'Off'} {showGridMenu ? '⌃' : '⌄'}
           </button>
-          <button
-            className={`editor-tab ${editorTab === 'foil' ? 'active' : ''}`}
-            onClick={() => setEditorTab('foil')}
-          >
-            Foil / Emboss / Hot-Stamp
-          </button>
+          {showGridMenu && <div className="header-grid-dropdown" role="dialog" aria-label="Grid settings">
+            <div className="header-grid-dropdown-title"><span>Grid &amp; Guides</span><button onClick={() => setShowGridMenu(false)} aria-label="Close grid settings">×</button></div>
+            <label className="header-grid-toggle"><span>Show grid lines</span><input type="checkbox" checked={showGrid} onChange={(event) => setShowGrid(event.target.checked)} /></label>
+            <label className="header-grid-toggle"><span>Snap positions</span><input type="checkbox" checked={snapToGrid} onChange={(event) => setSnapToGrid(event.target.checked)} /></label>
+            <div className="header-grid-fields"><label><span>Horizontal</span><input type="number" min="2" max="500" value={gridX} onChange={(event) => setGridX(Math.max(2, Number(event.target.value) || 2))} /></label><label><span>Vertical</span><input type="number" min="2" max="500" value={gridY} onChange={(event) => setGridY(Math.max(2, Number(event.target.value) || 2))} /></label></div>
+            <label className="header-grid-opacity"><span>Opacity <b>{gridOpacity}%</b></span><input type="range" min="10" max="90" step="5" value={gridOpacity} onChange={(event) => setGridOpacity(Number(event.target.value))} /></label>
+            <div className="header-guide-summary"><span>Ruler guides: {verticalGuides.length + horizontalGuides.length}</span>{(verticalGuides.length > 0 || horizontalGuides.length > 0) && <button onClick={() => { setVerticalGuides([]); setHorizontalGuides([]); }}>Clear guides</button>}</div>
+            <small>Drag from the top or left ruler to create a guide. Click the ruler corner to toggle the grid.</small>
+          </div>}
         </div>
 
-        <div className="editor-toolbar-divider" />
-
+        {selectedNumberItem && <div className="header-rotation-controls" aria-label={`Number position ${selectedIndex + 1} rotation`}>
+          <span>Position #{selectedIndex + 1}</span>
+          <label>Rotation <input type="number" value={selectedNumberItem.rotation} onChange={(event) => updateSelectedNumberPosition({ rotation: Number(event.target.value) || 0 })} /></label>
+          <select value={[0, 90, 180, 270].includes(selectedNumberItem.rotation) ? selectedNumberItem.rotation : 'custom'} onChange={(event) => event.target.value !== 'custom' && updateSelectedNumberPosition({ rotation: Number(event.target.value) })} aria-label="Rotation preset">
+            <option value="custom">Preset</option>
+            <option value={0}>0°</option>
+            <option value={90}>90°</option>
+            <option value={180}>180°</option>
+            <option value={270}>270°</option>
+          </select>
+        </div>}
         <button className="btn btn-ghost btn-sm" onClick={handleImportImage}>
           {currentAsset ? '📷 Change Image' : '📷 Import Image'}
         </button>
-        <button className="btn btn-primary btn-sm" onClick={handleAddNumberItem} title="Add number position (Shift + N)">
-          + Add Number Position
-        </button>
-        <button
-          className={`btn btn-ghost btn-sm ${showGrid ? 'toolbar-control-active' : ''}`}
-          onClick={() => setShowGrid((visible) => !visible)}
-          title="Show or hide canvas grid"
-        >
-          Grid {showGrid ? 'On' : 'Off'}
-        </button>
-        <button
-          className={`btn btn-ghost btn-sm ${panMode ? 'toolbar-control-active' : ''}`}
-          onClick={() => setPanMode((enabled) => !enabled)}
-          title="Hand tool (H). Use V to return to Select."
-        >
-          ✋ Pan {panMode ? 'On' : 'Off'}
-        </button>
-        <button
-          className={`btn btn-ghost btn-sm ${workspaceLocked ? 'toolbar-control-active' : ''}`}
-          onClick={() => setWorkspaceLocked((locked) => !locked)}
-          title={workspaceLocked ? 'Unlock panel layout' : 'Lock panel layout'}
-        >
-          {workspaceLocked ? '🔒 Workspace' : '🔓 Workspace'}
-        </button>
-        <button
-          className={`btn btn-ghost btn-sm ${showSheetPreview ? 'toolbar-control-active' : ''}`}
-          onClick={() => setShowSheetPreview((visible) => !visible)}
-          disabled={!currentAsset || exportPageCount < 1}
-          title={currentAsset ? 'Open or close sheet navigation' : 'Import a design to use Sheet Preview'}
-        >
-          ◫ Sheet Preview
-        </button>
-
+        {currentAsset && <span className="editor-template-name" title={currentAsset.originalFilename}>📄 {currentAsset.originalFilename}</span>}
         <div className="editor-toolbar-spacer" />
-        <button className="export-toolbar-button" onClick={() => setShowExportDialog(true)} disabled={!currentAsset} title="Open PDF export settings (Ctrl/Command + Alt/Option + Shift + W)">
-          <span className="export-toolbar-icon">⇩</span>
-          <span className="export-toolbar-copy"><strong>Export PDF</strong><small>{currentAsset ? `${exportPageCount} ${exportPageCount === 1 ? 'page' : 'pages'}` : 'Import a design first'}</small></span>
-          <kbd>⌘⇧⌥W</kbd>
-        </button>
         <div className="zoom-controls" aria-label="Preview zoom controls">
           <button className="zoom-button" onClick={() => changeZoom(previewZoom - 10)} title="Zoom out">−</button>
           <select
@@ -1250,7 +1348,6 @@ export function Editor() {
             ))}
           </select>
           <button className="zoom-button" onClick={() => changeZoom(previewZoom + 10)} title="Zoom in">+</button>
-          <button className="zoom-reset" onClick={() => { changeZoom(100); setCanvasPan({ x: 0, y: 0 }); }} title="Reset preview zoom and pan position">Reset</button>
         </div>
       </div>
 
@@ -1260,7 +1357,7 @@ export function Editor() {
             <div className="export-dialog-heading"><div><span className="dashboard-eyebrow">Editor controls</span><h2 className="dialog-title">Keyboard shortcuts</h2></div><button onClick={() => setShowShortcutsDialog(false)} aria-label="Close shortcuts">×</button></div>
             <div className="shortcuts-grid">
               <section><h3>History</h3><div><span>Undo</span><kbd>Ctrl/⌘ Z</kbd></div><div><span>Redo</span><kbd>Ctrl/⌘ Shift Z</kbd></div><div><span>Redo alternative</span><kbd>Ctrl/⌘ Y</kbd></div></section>
-              <section><h3>Number layers</h3><div><span>Add number position</span><kbd>Shift N</kbd></div><div><span>Duplicate linked text</span><kbd>Ctrl/⌘ J</kbd></div><div><span>Delete selected</span><kbd>Delete</kbd></div><div><span>Group layers</span><kbd>Ctrl/⌘ G</kbd></div><div><span>Ungroup</span><kbd>Ctrl/⌘ Shift G</kbd></div></section>
+              <section><h3>Number layers</h3><div><span>Add number position</span><kbd>Shift N</kbd></div><div><span>Duplicate linked text</span><kbd>Ctrl/⌘ J</kbd></div><div><span>Duplicate by dragging</span><kbd>Alt/⌥ + Drag</kbd></div><div><span>Delete selected</span><kbd>Delete</kbd></div><div><span>Group layers</span><kbd>Ctrl/⌘ G</kbd></div><div><span>Ungroup</span><kbd>Ctrl/⌘ Shift G</kbd></div></section>
               <section><h3>Tools &amp; position</h3><div><span>Select / Move tool</span><kbd>V</kbd></div><div><span>Hand / Pan tool</span><kbd>H</kbd></div><div><span>Temporary Hand tool</span><kbd>Hold Space</kbd></div><div><span>Rotate 90° clockwise</span><kbd>R</kbd></div><div><span>Rotate 90° counter-clockwise</span><kbd>Shift R</kbd></div><div><span>Nudge 1 px</span><kbd>Arrow keys</kbd></div><div><span>Nudge 10 px</span><kbd>Shift + Arrow</kbd></div></section>
               <section><h3>View &amp; output</h3><div><span>Full screen mode</span><kbd>F</kbd></div><div><span>Hide/show panels</span><kbd>Tab</kbd></div><div><span>Collapse left panel</span><kbd>[</kbd></div><div><span>Collapse right panel</span><kbd>]</kbd></div><div><span>Toggle grid</span><kbd>Ctrl/⌘ '</kbd></div><div><span>Zoom in</span><kbd>Ctrl/⌘ +</kbd></div><div><span>Zoom out</span><kbd>Ctrl/⌘ −</kbd></div><div><span>Export PDF</span><kbd>Ctrl/⌘ Alt/⌥ Shift W</kbd></div></section>
               <section><h3>Workspace</h3><div><span>Lock/unlock layout</span><kbd>Ctrl/⌘ Shift L</kbd></div><div><span>Reset panel layout</span><kbd>Ctrl/⌘ Shift R</kbd></div><div><span>Resize panels</span><kbd>Drag divider</kbd></div></section>
@@ -1284,7 +1381,7 @@ export function Editor() {
               <div><strong>{exportPageCount}</strong><span>PDF pages</span></div>
             </div>
             <div className="export-flow-preview">
-              <span>Sheet 1: {numberItems.map((_, index) => numberArrangement === 'same-number' ? exportNumbers[0] : numberArrangement === 'custom-pattern' || numberArrangement === 'linked-across-sheet' ? exportNumbers[uniquePatternKeys.indexOf(customPatternKeys[index])] : numberArrangement === 'linked-cut-stack' ? exportNumbers[uniquePatternKeys.indexOf(customPatternKeys[index]) * exportPageCount] : numberArrangement === 'cut-stack' ? exportNumbers[index * exportPageCount] : exportNumbers[index]).filter(Boolean).join(' · ') || 'No numbers'}</span>
+              <span>Sheet 1: {numberItems.map((_, index) => exportNumbers[numberLayout.numberIndexFor(0, index)]).filter(Boolean).join(' · ') || 'No numbers'}</span>
               <b>→</b>
               <span>{exportNumbers.length ? exportNumbers[exportNumbers.length - 1] : '—'}</span>
             </div>
@@ -1325,7 +1422,8 @@ export function Editor() {
             {!leftPanelCollapsed && <span>Tools &amp; Layers</span>}
             <button onClick={() => !workspaceLocked && setLeftPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={leftPanelCollapsed ? 'Expand left panel' : 'Collapse left panel'}>{leftPanelCollapsed ? '›' : '‹'}</button>
           </div>
-          <div className="panel-section number-flow-panel">
+          <div ref={setNumberPositionsTarget} className="number-positions-left-target" />
+          {numberFlowTarget && createPortal(<div className="panel-section number-flow-panel">
             <div className="layer-panel-heading">
               <div className="panel-section-title">Number Flow</div>
               <span>{numberItems.length} steps</span>
@@ -1337,13 +1435,11 @@ export function Editor() {
               <button className={primaryFlowMode === 'cut-stack' ? 'active' : ''} onClick={() => selectPrimaryFlow('cut-stack')}>
                 <span>1│101│201</span><strong>Cut &amp; stack</strong><small>One range per position</small>
               </button>
-              <button className={primaryFlowMode === 'same-number' ? 'active' : ''} onClick={() => selectPrimaryFlow('same-number')}>
-                <span>1 = 1 = 1</span><strong>Same number</strong><small>Repeat on coupon and stub</small>
-              </button>
-              <button className={primaryFlowMode === 'custom-pattern' ? 'active' : ''} onClick={() => selectPrimaryFlow('custom-pattern')}>
-                <span>1 = 1 │ 2</span><strong>Custom pattern</strong><small>Choose which positions match</small>
-              </button>
             </div>
+            <button className={`connection-editor-toggle ${showAdvancedFlow ? 'active' : ''}`} onClick={() => setShowAdvancedFlow((visible) => !visible)} aria-expanded={showAdvancedFlow}>
+              <span>⚙</span><span><strong>{showAdvancedFlow ? 'Hide advanced flow options' : 'Advanced flow options'}</strong><small>Copies, direction, ranges and connections</small></span><b>{showAdvancedFlow ? '▴' : '▾'}</b>
+            </button>
+            {showAdvancedFlow && <>
             {(primaryFlowMode === 'across-sheet' || primaryFlowMode === 'cut-stack') && (
               <button className={`linked-copies-toggle ${linkedCopiesEnabled ? 'active' : ''}`} onClick={toggleLinkedCopies} role="switch" aria-checked={linkedCopiesEnabled}>
                 <span className="linked-copies-switch"><i /></span>
@@ -1464,22 +1560,16 @@ export function Editor() {
               </div>
             )}
             <div className="flow-summary">Sheet {safePreviewSheet + 1}: <strong>{previewSheetNumbers.filter(Boolean).join(' · ') || 'No numbers'}</strong></div>
-          </div>
+            </>}
+          </div>, numberFlowTarget)}
 
-          <div className="panel-section">
+          <div className="panel-section imported-template-panel">
             <div className="panel-section-title">Imported Template</div>
             {currentAsset ? (
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
                 <div style={{ wordBreak: 'break-all', marginBottom: '8px' }}>
                   📄 <strong>{currentAsset.originalFilename}</strong>
                 </div>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  style={{ width: '100%' }}
-                  onClick={handleImportImage}
-                >
-                  Change Template Image
-                </button>
               </div>
             ) : (
               <button
@@ -1492,10 +1582,10 @@ export function Editor() {
             )}
           </div>
 
-          <div className="panel-section">
+          <div className="panel-section layers-panel-section">
             <div className="layer-panel-heading">
               <div className="panel-section-title">Layers</div>
-              <span>{numberItems.length + 1}</span>
+              <span>{layerGroups.length + 1}</span>
             </div>
             <div className="layer-selection-toolbar">
               <span>{selectedLayerIds.length} selected</span>
@@ -1535,27 +1625,7 @@ export function Editor() {
               </div>
             )}
 
-            <div className="layer-stack-label">Number positions <span>Shift-click to select multiple</span></div>
             <div className="canvas-layer-list">
-              {numberItems.map((item, idx) => {
-                const selected = selectedLayerIds.includes(item.id);
-                const grouped = layerGroups.some((group) => group.itemIds.includes(item.id));
-                return (
-                  <button
-                    key={item.id || idx}
-                    className={`canvas-layer-item ${selected ? 'selected' : ''}`}
-                    onClick={(event) => handleLayerSelect(event, idx)}
-                  >
-                    <span className={`layer-select-box ${selected ? 'checked' : ''}`}>{selected ? '✓' : ''}</span>
-                    <span className="layer-kind-icon">#</span>
-                    <span className="layer-item-copy">
-                      <strong>Position #{idx + 1}</strong>
-                      <small>{Math.round(item.x)}, {Math.round(item.y)} · {item.rotation}°</small>
-                    </span>
-                    {grouped && <span className="layer-group-badge">Grouped</span>}
-                  </button>
-                );
-              })}
               <div className="canvas-layer-item background-layer">
                 <span className="layer-select-box locked">⌕</span>
                 <span className="layer-kind-icon image">▧</span>
@@ -1564,72 +1634,6 @@ export function Editor() {
             </div>
           </div>
 
-          <div className="panel-section">
-            <div className="panel-section-title">Grid &amp; Snapping</div>
-            <label className="grid-toggle-row">
-              <span>Show grid lines</span>
-              <span className="toggle-switch">
-                <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} />
-                <span className="toggle-switch-track"><span /></span>
-              </span>
-            </label>
-            <label className="grid-toggle-row">
-              <span>Snap positions</span>
-              <span className="toggle-switch">
-                <input type="checkbox" checked={snapToGrid} onChange={(e) => setSnapToGrid(e.target.checked)} />
-                <span className="toggle-switch-track"><span /></span>
-              </span>
-            </label>
-            <div className="grid-settings-row">
-              <label>
-                <span>Horizontal</span>
-                <input type="number" min="2" max="500" value={gridX} onChange={(e) => setGridX(Math.max(2, Number(e.target.value) || 2))} />
-              </label>
-              <label>
-                <span>Vertical</span>
-                <input type="number" min="2" max="500" value={gridY} onChange={(e) => setGridY(Math.max(2, Number(e.target.value) || 2))} />
-              </label>
-            </div>
-            <label className="grid-opacity-row">
-              <span>Grid opacity</span>
-              <span>{gridOpacity}%</span>
-              <input type="range" min="10" max="90" step="5" value={gridOpacity} onChange={(e) => setGridOpacity(Number(e.target.value))} />
-            </label>
-            <div className="ruler-scale-summary"><span>Ruler scale</span><strong>Pixels · {previewZoom}% zoom</strong></div>
-            <div className="grid-settings-hint">Spacing uses canvas pixels. Enable snapping to align number positions automatically.</div>
-
-            <div className="manual-guides-header photoshop-guides-header">
-              <span>Ruler guides</span>
-              <span className="guide-count">{verticalGuides.length + horizontalGuides.length}</span>
-              {(verticalGuides.length > 0 || horizontalGuides.length > 0) && (
-                <button onClick={() => { setVerticalGuides([]); setHorizontalGuides([]); }}>Clear all</button>
-              )}
-            </div>
-            <div className="ruler-guide-help">
-              <div><span className="ruler-help-icon top">↧</span><p><strong>Horizontal guide</strong>Drag down from the top ruler</p></div>
-              <div><span className="ruler-help-icon side">↦</span><p><strong>Vertical guide</strong>Drag right from the left ruler</p></div>
-            </div>
-            <div className="guide-delete-help">To delete a guide, drag it back outside the document or double-click it.</div>
-          </div>
-
-          <div className="panel-section">
-            <div className="panel-section-title">Preview Zoom</div>
-            <div className="preview-zoom-value">{previewZoom}%</div>
-            <input
-              className="preview-zoom-slider"
-              type="range"
-              min="25"
-              max="300"
-              step="5"
-              value={previewZoom}
-              onChange={(e) => changeZoom(Number(e.target.value))}
-            />
-            <div className="preview-zoom-presets">
-              {[50, 100, 150, 200].map((value) => (
-                <button key={value} className={previewZoom === value ? 'active' : ''} onClick={() => changeZoom(value)}>{value}%</button>
-              ))}
-            </div>
-          </div>
         </aside>
         {!leftPanelCollapsed && <div className="panel-resize-handle left" onMouseDown={(event) => startPanelResize('left', event)} title={workspaceLocked ? 'Unlock workspace to resize' : 'Drag to resize left panel'} />}
 
@@ -1642,7 +1646,7 @@ export function Editor() {
         >
           {canvasSrc && (
             <>
-              <div className="canvas-ruler-corner" title="Ruler origin" />
+              <button className={`canvas-ruler-corner ${showGrid ? 'active' : ''}`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setShowGrid((visible) => !visible)} title="Toggle grid" aria-label="Toggle grid">▦</button>
               <div className="canvas-ruler canvas-ruler-top" onMouseDown={(event) => startGuideFromRuler(event, 'y')} title="Drag down to add a horizontal guide">
                 {canvasSize && Array.from({ length: Math.floor(canvasSize.width / (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)) + 1 }, (_, index) => index * (previewZoom < 60 ? 50 : previewZoom < 125 ? 25 : 10)).map((value) => (
                   <span key={value} data-label={value % 100 === 0 ? value : undefined} className={value % 100 === 0 ? 'major' : value % 50 === 0 ? 'mid' : 'minor'} style={{ left: `${rulerOrigin.x - CANVAS_RULER_SIZE + value * (previewZoom / 100)}px` }} />
@@ -1843,15 +1847,8 @@ export function Editor() {
             </div>
           ) : (
             <div className="editor-canvas-placeholder">
-              <span className="editor-canvas-placeholder-icon">
-                {editorTab === 'receipt' ? '📋' : '✨'}
-              </span>
-              <span className="editor-canvas-placeholder-text">
-                {editorTab === 'receipt'
-                  ? 'Receipt / Coupon Canvas'
-                  : 'Foil / Emboss / Hot-Stamp Canvas'
-                }
-              </span>
+              <span className="editor-canvas-placeholder-icon">📋</span>
+              <span className="editor-canvas-placeholder-text">Receipt / Coupon Canvas</span>
               <span className="editor-canvas-placeholder-hint">
                 Import a PDF or image file (PNG, JPG, SVG, WebP) to place it on the canvas.
               </span>
@@ -1865,10 +1862,11 @@ export function Editor() {
           )}
           {currentAsset && exportPageCount > 0 && showSheetPreview && (
             <div className="sheet-preview-nav">
+              <button onClick={() => setPreviewSheet(0)} disabled={safePreviewSheet === 0} title="First sheet" aria-label="First sheet">«</button>
               <button onClick={() => setPreviewSheet((page) => Math.max(0, page - 1))} disabled={safePreviewSheet === 0}>‹</button>
               <div><span>Sheet preview</span><strong>{safePreviewSheet + 1} / {exportPageCount}</strong></div>
               <button onClick={() => setPreviewSheet((page) => Math.min(exportPageCount - 1, page + 1))} disabled={safePreviewSheet >= exportPageCount - 1}>›</button>
-              <button className="sheet-preview-close" onClick={() => setShowSheetPreview(false)} title="Close Sheet Preview" aria-label="Close Sheet Preview">×</button>
+              <button onClick={() => setPreviewSheet(exportPageCount - 1)} disabled={safePreviewSheet >= exportPageCount - 1} title="Last sheet" aria-label="Last sheet">»</button>
             </div>
           )}
         </div>
@@ -1880,11 +1878,14 @@ export function Editor() {
             <button onClick={() => !workspaceLocked && setRightPanelCollapsed((collapsed) => !collapsed)} disabled={workspaceLocked} title={rightPanelCollapsed ? 'Expand right panel' : 'Collapse right panel'}>{rightPanelCollapsed ? '‹' : '›'}</button>
             {!rightPanelCollapsed && <span>Properties</span>}
           </div>
+          <div className="editor-properties-scroll">
           <NumberingPanel
             projectId={activeProject.id}
             numberSettings={numberSettings}
-            manualNumbers={manualNumbers}
             numberItems={numberItems}
+            numberGroupKeys={customPatternKeys}
+            previewNumbers={previewSheetNumbers}
+            numberPositionsTarget={numberPositionsTarget}
             selectedIndex={selectedIndex}
             onSelectIndex={(idx) => {
               setSelectedIndex(idx);
@@ -1896,7 +1897,10 @@ export function Editor() {
               }
             }}
             onAddNumberItem={handleAddNumberItem}
+            onDuplicateNumber={duplicateNumberPosition}
+            onLinkToSelected={linkNumberPositionToSelected}
             onRemoveNumberItem={handleRemoveNumberItem}
+            onReceiptsPerSheetChange={setReceiptsPerSheet}
             onSettingsChange={(newSettings) => {
               if (numberSettings && numberSettings.mode === newSettings.mode && numberSettings.startNumber === newSettings.startNumber && numberSettings.endNumber === newSettings.endNumber && numberSettings.step === newSettings.step && numberSettings.padding === newSettings.padding && numberSettings.prefix === newSettings.prefix && numberSettings.suffix === newSettings.suffix) return;
               setNumberSettings(newSettings);
@@ -1905,50 +1909,15 @@ export function Editor() {
                 api.saveNumberSettings(newSettings).catch((err) => console.error('Failed to save number settings:', err));
               }, 250);
             }}
-            onManualNumbersChange={(newManualList) => {
-              const items: ManualNumber[] = newManualList.map((val, idx) => ({
-                id: `mn_${idx}`,
-                projectId: activeProject.id,
-                sequenceOrder: idx,
-                numberValue: val,
-                isValid: true,
-              }));
-              setManualNumbers(items);
-              if (manualNumbersSaveTimer.current !== null) window.clearTimeout(manualNumbersSaveTimer.current);
-              manualNumbersSaveTimer.current = window.setTimeout(() => {
-                api.saveManualNumbers(activeProject.id, newManualList).catch((err) => console.error('Failed to save manual numbers:', err));
-              }, 250);
-            }}
-            onItemChange={(idx, updatedItem) => {
-              const currentItem = numberItems[idx];
-              if (currentItem && currentItem.numberValue === updatedItem.numberValue && currentItem.x === updatedItem.x && currentItem.y === updatedItem.y && currentItem.rotation === updatedItem.rotation && currentItem.fontFamily === updatedItem.fontFamily && currentItem.fontSize === updatedItem.fontSize && currentItem.fontStyle === updatedItem.fontStyle && currentItem.fontColor === updatedItem.fontColor && currentItem.alignment === updatedItem.alignment) return;
-              captureUndoState();
-              setNumberItems((prev) => {
-                const previousItem = prev[idx];
-                const activeGroup = layerGroups.find((group) => group.id === activeGroupId && group.itemIds.includes(updatedItem.id));
-                if (!activeGroup || !previousItem) {
-                  return prev.map((item, index) => index === idx ? updatedItem : item);
-                }
-                const dx = updatedItem.x - previousItem.x;
-                const dy = updatedItem.y - previousItem.y;
-                return prev.map((item, index) => {
-                  if (!activeGroup.itemIds.includes(item.id)) return item;
-                  if (index === idx) return updatedItem;
-                  return {
-                    ...item,
-                    x: Math.max(0, item.x + dx),
-                    y: Math.max(0, item.y + dy),
-                    rotation: updatedItem.rotation,
-                    fontFamily: updatedItem.fontFamily,
-                    fontSize: updatedItem.fontSize,
-                    fontStyle: updatedItem.fontStyle,
-                    fontColor: updatedItem.fontColor,
-                    alignment: updatedItem.alignment,
-                  };
-                });
-              });
-            }}
+            onItemChange={handleNumberItemChange}
           />
+          <div ref={setNumberFlowTarget} className="number-flow-property-target" />
+          </div>
+          {!rightPanelCollapsed && <button className="export-toolbar-button export-panel-button" onClick={() => setShowExportDialog(true)} disabled={!currentAsset} title="Open PDF export settings (Ctrl/Command + Alt/Option + Shift + W)">
+            <span className="export-toolbar-icon">⇩</span>
+            <span className="export-toolbar-copy"><strong>Export PDF</strong><small>{currentAsset ? `${exportPageCount} ${exportPageCount === 1 ? 'page' : 'pages'}` : 'Import a design first'}</small></span>
+            <kbd>⌘⇧⌥W</kbd>
+          </button>}
         </aside>
       </div>
     </div>

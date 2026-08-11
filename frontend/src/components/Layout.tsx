@@ -58,6 +58,24 @@ export function Layout({ children }: LayoutProps) {
               Editor
             </button>
           )}
+          {activeProject && currentView === 'editor' && (
+            <button
+              className="toolbar-nav-item toolbar-grid-action"
+              onClick={() => window.dispatchEvent(new CustomEvent('recipta:toggle-grid-menu'))}
+              title="Grid, snapping, and ruler guide settings"
+            >
+              ▦ Grid
+            </button>
+          )}
+          {activeProject && currentView === 'editor' && (
+            <button
+              className="toolbar-nav-item toolbar-grid-action"
+              onClick={() => window.dispatchEvent(new CustomEvent('recipta:toggle-typography'))}
+              title="Show or hide Font & Typography"
+            >
+              Aa Font
+            </button>
+          )}
         </nav>
 
         <div className="toolbar-spacer" />
@@ -93,11 +111,6 @@ export function Layout({ children }: LayoutProps) {
                 ↺ <span>Reset Layout</span>
               </button>
             </>
-          )}
-          {activeProject && (
-            <span className="toolbar-project-type">
-              {activeProject.type === 'receipt' ? 'Receipt / Coupon' : 'Foil / Emboss / Hot-Stamp'}
-            </span>
           )}
           <span className="toolbar-version">v0.1.0</span>
           <button className={`toolbar-fullscreen-button ${isFullscreen ? 'active' : ''}`} onClick={() => void toggleFullscreen()} title="Full screen mode (F)" aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}>

@@ -1,4 +1,5 @@
 import type { NumberItem } from '../types';
+import { createNumberLayoutPlan, type NumberArrangement } from './numberLayout';
 
 export interface PdfExportOptions {
   imageSource: string;
@@ -9,7 +10,7 @@ export interface PdfExportOptions {
   pageWidthPoints: number;
   pageHeightPoints: number;
   quality: number;
-  arrangement: 'across-sheet' | 'cut-stack' | 'same-number' | 'custom-pattern' | 'linked-cut-stack' | 'linked-across-sheet';
+  arrangement: NumberArrangement;
   patternGroups?: string[];
   includeBackground: boolean;
 }
@@ -107,12 +108,8 @@ export async function generateNumberedPdf(options: PdfExportOptions, onProgress?
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Canvas rendering is unavailable.');
 
-  const patternGroups = options.positions.map((_, index) => options.patternGroups?.[index] || String(index + 1));
-  const uniquePatternGroups = [...new Set(patternGroups)];
-  const valuesPerPage = options.arrangement === 'custom-pattern' || options.arrangement === 'linked-cut-stack' || options.arrangement === 'linked-across-sheet' ? uniquePatternGroups.length : options.positions.length;
-  const pageCount = options.arrangement === 'same-number'
-    ? options.numbers.length
-    : Math.ceil(options.numbers.length / Math.max(1, valuesPerPage));
+  const layout = createNumberLayoutPlan(options.numbers.length, options.positions.length, options.arrangement, options.patternGroups);
+  const pageCount = layout.pageCount;
   const pages: Uint8Array[] = [];
   for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
     context.clearRect(0, 0, width, height);
@@ -125,18 +122,7 @@ export async function generateNumberedPdf(options: PdfExportOptions, onProgress?
       context.fillRect(0, 0, width, height);
     }
     options.positions.forEach((position, positionIndex) => {
-      const patternIndex = uniquePatternGroups.indexOf(patternGroups[positionIndex]);
-      const numberIndex = options.arrangement === 'same-number'
-        ? pageIndex
-        : options.arrangement === 'custom-pattern'
-          ? pageIndex * uniquePatternGroups.length + patternIndex
-        : options.arrangement === 'linked-across-sheet'
-          ? pageIndex * uniquePatternGroups.length + patternIndex
-        : options.arrangement === 'linked-cut-stack'
-          ? pageIndex + patternIndex * pageCount
-        : options.arrangement === 'cut-stack'
-          ? pageIndex + positionIndex * pageCount
-          : pageIndex * options.positions.length + positionIndex;
+      const numberIndex = layout.numberIndexFor(pageIndex, positionIndex);
       const number = options.numbers[numberIndex];
       if (number === undefined || !position.isVisible) return;
       const fontSize = position.fontSize * exportScale;
