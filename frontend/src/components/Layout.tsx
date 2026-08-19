@@ -10,6 +10,9 @@ interface LayoutProps {
 export function Layout({ children }: LayoutProps) {
   const { currentView, setCurrentView, activeProject } = useAppStore();
   const [isFullscreen, setIsFullscreen] = React.useState(false);
+  const [gridMenuOpen, setGridMenuOpen] = React.useState(false);
+  const [fontMenuOpen, setFontMenuOpen] = React.useState(false);
+  const fontMenuRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     const handleFullscreenChange = () => void getFullscreenState().then(setIsFullscreen);
@@ -22,6 +25,23 @@ export function Layout({ children }: LayoutProps) {
       window.removeEventListener(FULLSCREEN_EVENT, handleAppFullscreenChange);
     };
   }, []);
+
+  React.useEffect(() => {
+    if (!fontMenuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!fontMenuRef.current?.contains(event.target as Node)) setFontMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeMenu);
+    return () => document.removeEventListener('mousedown', closeMenu);
+  }, [fontMenuOpen]);
+
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent('recipta:font-menu-open-change', { detail: fontMenuOpen }));
+  }, [fontMenuOpen]);
+
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent('recipta:grid-menu-open-change', { detail: gridMenuOpen }));
+  }, [gridMenuOpen]);
 
   const toggleFullscreen = async () => {
     try {
@@ -44,37 +64,61 @@ export function Layout({ children }: LayoutProps) {
         </div>
 
         <nav className="toolbar-nav">
-          <button
-            className={`toolbar-nav-item ${currentView === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setCurrentView('dashboard')}
-          >
+              <button
+                type="button"
+                className={`toolbar-nav-item ${currentView === 'dashboard' ? 'active' : ''}`}
+                onClick={() => setCurrentView('dashboard')}
+              >
             Dashboard
           </button>
           {activeProject && (
-            <button
-              className={`toolbar-nav-item ${currentView === 'editor' ? 'active' : ''}`}
-              onClick={() => setCurrentView('editor')}
-            >
+              <button
+                type="button"
+                className={`toolbar-nav-item ${currentView === 'editor' ? 'active' : ''}`}
+                onClick={() => setCurrentView('editor')}
+              >
               Editor
             </button>
           )}
           {activeProject && currentView === 'editor' && (
-            <button
-              className="toolbar-nav-item toolbar-grid-action"
-              onClick={() => window.dispatchEvent(new CustomEvent('recipta:toggle-grid-menu'))}
-              title="Grid, snapping, and ruler guide settings"
-            >
-              ▦ Grid
-            </button>
+            <div className="toolbar-menu-wrap">
+              <button
+                type="button"
+                className="toolbar-nav-item toolbar-grid-action"
+                onClick={() => setGridMenuOpen((open) => !open)}
+                title="Grid, snapping, and ruler guide settings"
+                aria-haspopup="dialog"
+                aria-expanded={gridMenuOpen}
+              >
+                ▦ Grid
+              </button>
+            </div>
           )}
           {activeProject && currentView === 'editor' && (
-            <button
-              className="toolbar-nav-item toolbar-grid-action"
-              onClick={() => window.dispatchEvent(new CustomEvent('recipta:toggle-typography'))}
-              title="Show or hide Font & Typography"
-            >
-              Aa Font
-            </button>
+            <div className="toolbar-menu-wrap" ref={fontMenuRef}>
+              <button
+                type="button"
+                className="toolbar-nav-item toolbar-grid-action"
+                onClick={() => setFontMenuOpen((open) => !open)}
+                title="Font and typography settings"
+                aria-haspopup="menu"
+                aria-expanded={fontMenuOpen}
+                >
+                Aa Font
+              </button>
+              {fontMenuOpen && (
+                <div className="toolbar-dropdown toolbar-font-dropdown" role="menu" aria-label="Font menu">
+                  <div className="toolbar-dropdown-title">
+                    <span>Font &amp; Typography</span>
+                    <button type="button" onClick={() => setFontMenuOpen(false)} aria-label="Close font menu">×</button>
+                  </div>
+                  <div id="toolbar-font-panel-target" className="toolbar-font-panel-target" />
+                  <div className="toolbar-dropdown-note">
+                    Use this menu to edit font family, size, style, color and alignment.
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </nav>
 
@@ -95,6 +139,7 @@ export function Layout({ children }: LayoutProps) {
           {activeProject && currentView === 'editor' && (
             <>
               <button
+                type="button"
                 className="toolbar-header-action"
                 onClick={() => window.dispatchEvent(new CustomEvent('recipta:show-shortcuts'))}
                 title="Keyboard shortcuts (?)"
@@ -103,6 +148,7 @@ export function Layout({ children }: LayoutProps) {
                 ⌨ <span>Shortcuts</span>
               </button>
               <button
+                type="button"
                 className="toolbar-header-action"
                 onClick={() => window.dispatchEvent(new CustomEvent('recipta:reset-layout'))}
                 title="Restore the default panel layout"
@@ -113,7 +159,7 @@ export function Layout({ children }: LayoutProps) {
             </>
           )}
           <span className="toolbar-version">v0.1.0</span>
-          <button className={`toolbar-fullscreen-button ${isFullscreen ? 'active' : ''}`} onClick={() => void toggleFullscreen()} title="Full screen mode (F)" aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}>
+          <button type="button" className={`toolbar-fullscreen-button ${isFullscreen ? 'active' : ''}`} onClick={() => void toggleFullscreen()} title="Full screen mode (F)" aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}>
             {isFullscreen ? '↙' : '⛶'}
           </button>
         </div>

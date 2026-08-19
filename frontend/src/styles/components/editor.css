@@ -224,12 +224,29 @@
     linear-gradient(to right, #2563eb 1px, transparent 1px),
     linear-gradient(to bottom, #2563eb 1px, transparent 1px);
 }
+
+.canvas-grid-outline-only {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border: 1px solid rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
 .canvas-margin-overlay {
   position: absolute;
   z-index: 3;
   pointer-events: none;
   border: 1px dashed rgba(77, 143, 185, .9);
   box-shadow: 0 0 0 1px rgba(255,255,255,.1);
+}
+
+.canvas-marquee-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: transparent;
+  cursor: crosshair;
 }
 
 .canvas-zoom-stage {
@@ -814,9 +831,13 @@ button.canvas-layer-item:hover { color: var(--color-text-primary); background: r
 .number-position-context-menu button:hover:not(:disabled) { background: #3d6377; }
 .number-position-context-menu button:disabled { opacity: .38; }
 .number-position-context-menu .danger { color: #ff8a8a; }
-.header-grid-dropdown { position: absolute; top: calc(100% + 8px); left: 0; z-index: 100; display: flex; flex-direction: column; gap: 9px; width: 258px; padding: 11px; color: #cfcfcf; background: #292929; border: 1px solid #4d8fb9; border-radius: 3px; box-shadow: 0 12px 26px rgba(0,0,0,.45); }
+.header-grid-dropdown { position: absolute; top: calc(100% + 4px); left: 0; z-index: 100; display: flex; flex-direction: column; gap: 9px; width: 258px; padding: 11px; color: #cfcfcf; background: #292929; border: 1px solid #4d8fb9; border-radius: 3px; box-shadow: 0 12px 26px rgba(0,0,0,.45); }
 .header-grid-dropdown-title { display: flex; align-items: center; justify-content: space-between; padding-bottom: 7px; border-bottom: 1px solid #454545; color: #dcecf6; font-size: 11px; font-weight: 650; }
 .header-grid-dropdown-title button { width: 22px; height: 22px; color: #a8bdca; background: #343434; border: 1px solid #505050; border-radius: 2px; font-size: 16px; line-height: 1; }
+.header-grid-mode-row { display: grid; gap: 5px; color: #aaa; font-size: 10px; }
+.header-grid-mode-group { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.header-grid-mode-group button { padding: 6px 7px; color: #cfcfcf; background: #343434; border: 1px solid #505050; border-radius: 2px; font-size: 10px; }
+.header-grid-mode-group button.active { color: #eff8fc; background: #3f6f8b; border-color: #6fa5d2; }
 .header-grid-toggle { display: flex; align-items: center; justify-content: space-between; font-size: 10px; }
 .header-grid-toggle input { width: 16px; height: 16px; accent-color: #4d8fb9; }
 .header-grid-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

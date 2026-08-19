@@ -6,6 +6,10 @@
 import type { Project, ProjectFull, Asset } from '../types';
 import type { NumberSettings, ManualNumber, ValidationResult, NumberItem } from '../types';
 import type { SheetSettings, SheetLayout, CropBleedSettings } from '../types';
+import * as projectHandler from '../../wailsjs/go/handler/ProjectHandler';
+import * as numberingHandler from '../../wailsjs/go/handler/NumberingHandler';
+import * as sheetHandler from '../../wailsjs/go/handler/SheetHandler';
+import * as mainApp from '../../wailsjs/go/main/App';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 function isWailsAvailable(): boolean {
@@ -72,11 +76,6 @@ function saveBrowserProjects(projects: Project[]) {
   }
 }
 
-const PROJECT_HANDLER_PATH = '../../wailsjs/go/handler/ProjectHandler';
-const NUMBERING_HANDLER_PATH = '../../wailsjs/go/handler/NumberingHandler';
-const SHEET_HANDLER_PATH = '../../wailsjs/go/handler/SheetHandler';
-const MAIN_APP_PATH = '../../wailsjs/go/main/App';
-
 // ─── Project API ───
 
 export async function createProject(
@@ -85,9 +84,7 @@ export async function createProject(
   description: string = ''
 ): Promise<Project> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { CreateProject } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await CreateProject(name, projectType, description);
+    const result = await projectHandler.CreateProject(name, projectType, description);
     return result as unknown as Project;
   }
 
@@ -112,9 +109,7 @@ export async function createProject(
 
 export async function getProject(id: string): Promise<Project> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetProject } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await GetProject(id);
+    const result = await projectHandler.GetProject(id);
     return result as unknown as Project;
   }
 
@@ -126,9 +121,7 @@ export async function getProject(id: string): Promise<Project> {
 
 export async function getProjectFull(id: string): Promise<ProjectFull> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetProjectFull } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await GetProjectFull(id);
+    const result = await projectHandler.GetProjectFull(id);
     return result as unknown as ProjectFull;
   }
 
@@ -203,9 +196,7 @@ export async function getProjectFull(id: string): Promise<ProjectFull> {
 
 export async function listProjects(): Promise<Project[]> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { ListProjects } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await ListProjects();
+    const result = await projectHandler.ListProjects();
     return (result || []) as unknown as Project[];
   }
 
@@ -214,9 +205,7 @@ export async function listProjects(): Promise<Project[]> {
 
 export async function getRecentProjects(): Promise<Project[]> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetRecentProjects } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await GetRecentProjects();
+    const result = await projectHandler.GetRecentProjects();
     return (result || []) as unknown as Project[];
   }
 
@@ -225,9 +214,7 @@ export async function getRecentProjects(): Promise<Project[]> {
 
 export async function updateProject(project: Project): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { UpdateProject } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    return UpdateProject(project as any);
+    return projectHandler.UpdateProject(project as any);
   }
 
   const projects = getBrowserProjects();
@@ -240,9 +227,7 @@ export async function updateProject(project: Project): Promise<void> {
 
 export async function deleteProject(id: string): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { DeleteProject } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    return DeleteProject(id);
+    return projectHandler.DeleteProject(id);
   }
 
   const projects = getBrowserProjects().filter((p) => p.id !== id);
@@ -251,9 +236,7 @@ export async function deleteProject(id: string): Promise<void> {
 
 export async function duplicateProject(id: string): Promise<Project> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { DuplicateProject } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await DuplicateProject(id);
+    const result = await projectHandler.DuplicateProject(id);
     return result as unknown as Project;
   }
 
@@ -263,9 +246,7 @@ export async function duplicateProject(id: string): Promise<Project> {
 
 export async function importImage(projectId: string): Promise<Asset | null> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { ImportImage } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    const result = await ImportImage(projectId);
+    const result = await projectHandler.ImportImage(projectId);
     return result as unknown as Asset | null;
   }
 
@@ -318,13 +299,12 @@ export async function importImage(projectId: string): Promise<Asset | null> {
 
 export async function saveExportedPdf(fileName: string, pdf: Uint8Array): Promise<string> {
   if (isWailsAvailable()) {
-    const { SaveExportedPDF } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
     let binary = '';
     const chunkSize = 0x8000;
     for (let offset = 0; offset < pdf.length; offset += chunkSize) {
       binary += String.fromCharCode(...pdf.subarray(offset, offset + chunkSize));
     }
-    return SaveExportedPDF(fileName, btoa(binary));
+    return projectHandler.SaveExportedPDF(fileName, btoa(binary));
   }
 
   const blob = new Blob([pdf as BlobPart], { type: 'application/pdf' });
@@ -339,9 +319,7 @@ export async function saveExportedPdf(fileName: string, pdf: Uint8Array): Promis
 
 export async function getAssetDataUrl(projectId: string, assetId: string): Promise<string> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetAssetDataUrl } = await import(/* @vite-ignore */ PROJECT_HANDLER_PATH);
-    return GetAssetDataUrl(projectId, assetId);
+    return projectHandler.GetAssetDataUrl(projectId, assetId);
   }
   return '';
 }
@@ -350,9 +328,7 @@ export async function getAssetDataUrl(projectId: string, assetId: string): Promi
 
 export async function generateNumbers(projectId: string): Promise<string[]> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GenerateNumbers } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    const result = await GenerateNumbers(projectId);
+    const result = await numberingHandler.GenerateNumbers(projectId);
     return result || [];
   }
 
@@ -361,9 +337,7 @@ export async function generateNumbers(projectId: string): Promise<string[]> {
 
 export async function validateManualNumbers(numbers: string[]): Promise<ValidationResult> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { ValidateManualNumbers } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    const result = await ValidateManualNumbers(numbers);
+    const result = await numberingHandler.ValidateManualNumbers(numbers);
     return result as unknown as ValidationResult;
   }
 
@@ -380,17 +354,13 @@ export async function validateManualNumbers(numbers: string[]): Promise<Validati
 
 export async function saveNumberSettings(settings: NumberSettings): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { SaveNumberSettings } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    return SaveNumberSettings(settings as any);
+    return numberingHandler.SaveNumberSettings(settings as any);
   }
 }
 
 export async function getNumberSettings(projectId: string): Promise<NumberSettings | null> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetNumberSettings } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    const result = await GetNumberSettings(projectId);
+    const result = await numberingHandler.GetNumberSettings(projectId);
     return result as unknown as NumberSettings | null;
   }
 
@@ -399,25 +369,19 @@ export async function getNumberSettings(projectId: string): Promise<NumberSettin
 
 export async function saveManualNumbers(projectId: string, numbers: string[]): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { SaveManualNumbers } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    return SaveManualNumbers(projectId, numbers);
+    return numberingHandler.SaveManualNumbers(projectId, numbers);
   }
 }
 
 export async function saveNumberItems(projectId: string, items: NumberItem[]): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { SaveNumberItems } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    return SaveNumberItems(projectId, items as any);
+    return numberingHandler.SaveNumberItems(projectId, items as any);
   }
 }
 
 export async function getManualNumbers(projectId: string): Promise<ManualNumber[]> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetManualNumbers } = await import(/* @vite-ignore */ NUMBERING_HANDLER_PATH);
-    const result = await GetManualNumbers(projectId);
+    const result = await numberingHandler.GetManualNumbers(projectId);
     return (result || []) as unknown as ManualNumber[];
   }
 
@@ -428,9 +392,7 @@ export async function getManualNumbers(projectId: string): Promise<ManualNumber[
 
 export async function calculateSheet(projectId: string, totalItems: number): Promise<SheetLayout> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { CalculateSheet } = await import(/* @vite-ignore */ SHEET_HANDLER_PATH);
-    const result = await CalculateSheet(projectId, totalItems);
+    const result = await sheetHandler.CalculateSheet(projectId, totalItems);
     return result as unknown as SheetLayout;
   }
 
@@ -449,17 +411,13 @@ export async function calculateSheet(projectId: string, totalItems: number): Pro
 
 export async function saveSheetSettings(settings: SheetSettings): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { SaveSheetSettings } = await import(/* @vite-ignore */ SHEET_HANDLER_PATH);
-    return SaveSheetSettings(settings as any);
+    return sheetHandler.SaveSheetSettings(settings as any);
   }
 }
 
 export async function getSheetSettings(projectId: string): Promise<SheetSettings | null> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetSheetSettings } = await import(/* @vite-ignore */ SHEET_HANDLER_PATH);
-    const result = await GetSheetSettings(projectId);
+    const result = await sheetHandler.GetSheetSettings(projectId);
     return result as unknown as SheetSettings | null;
   }
 
@@ -468,17 +426,13 @@ export async function getSheetSettings(projectId: string): Promise<SheetSettings
 
 export async function saveCropBleedSettings(settings: CropBleedSettings): Promise<void> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { SaveCropBleedSettings } = await import(/* @vite-ignore */ SHEET_HANDLER_PATH);
-    return SaveCropBleedSettings(settings as any);
+    return sheetHandler.SaveCropBleedSettings(settings as any);
   }
 }
 
 export async function getCropBleedSettings(projectId: string): Promise<CropBleedSettings | null> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetCropBleedSettings } = await import(/* @vite-ignore */ SHEET_HANDLER_PATH);
-    return GetCropBleedSettings(projectId);
+    return sheetHandler.GetCropBleedSettings(projectId);
   }
 
   return null;
@@ -488,9 +442,7 @@ export async function getCropBleedSettings(projectId: string): Promise<CropBleed
 
 export async function getAppInfo(): Promise<Record<string, string>> {
   if (isWailsAvailable()) {
-    // @ts-ignore
-    const { GetAppInfo } = await import(/* @vite-ignore */ MAIN_APP_PATH);
-    return GetAppInfo();
+    return mainApp.GetAppInfo();
   }
 
   return { name: 'Recipta (Browser Mode)', version: '0.1.0' };

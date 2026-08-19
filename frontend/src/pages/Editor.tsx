@@ -42,6 +42,10 @@ const assetPreviewCache = new Map<string, string>();
 const WORKSPACE_LAYOUT_KEY = 'recipta-workspace-layout-v1';
 const LINK_SUMMARY_KEY = 'recipta-link-summary-visible';
 const CANVAS_RULER_SIZE = 20;
+const DEFAULT_NUMBER_ITEM_X = 250;
+const DEFAULT_NUMBER_ITEM_Y = 120;
+const NUMBER_ITEM_VERTICAL_GAP = 42;
+const NUMBER_ITEM_WRAP_X_GAP = 180;
 const ASSET_PREVIEW_TIMEOUT_MS = 15000;
 const PIXELS_PER_MM = 96 / 25.4;
 const DEFAULT_GROUP_ID = 'group_default_a';
@@ -70,6 +74,25 @@ function loadWorkspaceLayout(): WorkspaceLayout {
   } catch {
     return fallback;
   }
+}
+
+function getNextReadableNumberItemPosition(items: NumberItem[], canvasHeight?: number) {
+  if (!items.length) {
+    return { x: DEFAULT_NUMBER_ITEM_X, y: DEFAULT_NUMBER_ITEM_Y };
+  }
+
+  const lastItem = items[items.length - 1];
+  const nextY = lastItem.y + lastItem.height + NUMBER_ITEM_VERTICAL_GAP;
+  const bottomLimit = canvasHeight ? Math.max(DEFAULT_NUMBER_ITEM_Y, canvasHeight - 100) : Number.POSITIVE_INFINITY;
+
+  if (nextY <= bottomLimit) {
+    return { x: lastItem.x, y: nextY };
+  }
+
+  return {
+    x: lastItem.x + NUMBER_ITEM_WRAP_X_GAP,
+    y: DEFAULT_NUMBER_ITEM_Y,
+  };
 }
 
 function getNumberBoxCenter(item: NumberItem) {
@@ -178,7 +201,6 @@ export function Editor() {
   const [showNumberFlow, setShowNumberFlow] = useState(false);
   const [showConnectionEditor, setShowConnectionEditor] = useState(false);
   const [showLinkSummary, setShowLinkSummary] = useState(() => localStorage.getItem(LINK_SUMMARY_KEY) === 'true');
-  const [showAdvancedFlow, setShowAdvancedFlow] = useState(false);
   const [numberFlowTarget, setNumberFlowTarget] = useState<HTMLDivElement | null>(null);
   const [numberPositionsTarget, setNumberPositionsTarget] = useState<HTMLDivElement | null>(null);
   const [previewSheet, setPreviewSheet] = useState(0);
@@ -208,6 +230,7 @@ export function Editor() {
   const [gridX, setGridX] = useState(20);
   const [gridY, setGridY] = useState(20);
   const [gridOpacity, setGridOpacity] = useState(35);
+  const [gridOutlineOnly, setGridOutlineOnly] = useState(false);
   const [gridMargins, setGridMargins] = useState({ top: 5, right: 5, bottom: 5, left: 5 });
   const [previewZoom, setPreviewZoom] = useState(100);
   const [panMode, setPanMode] = useState(false);
@@ -217,6 +240,13 @@ export function Editor() {
   const [verticalGuides, setVerticalGuides] = useState<number[]>([]);
   const [horizontalGuides, setHorizontalGuides] = useState<number[]>([]);
   const [draggingGuide, setDraggingGuide] = useState<{ axis: 'x' | 'y'; index: number } | null>(null);
+  const [marqueeSelection, setMarqueeSelection] = useState<{
+    startX: number;
+    startY: number;
+    endX: number;
+    endY: number;
+    additive: boolean;
+  } | null>(null);
   const initialWorkspaceLayout = useRef<WorkspaceLayout>(loadWorkspaceLayout());
   const [leftPanelWidth, setLeftPanelWidth] = useState<number>(initialWorkspaceLayout.current.leftWidth);
   const [rightPanelWidth, setRightPanelWidth] = useState<number>(initialWorkspaceLayout.current.rightWidth);
@@ -228,6 +258,8 @@ export function Editor() {
   // Dragging state for active selected number overlay
   const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
   const dragStart = useRef({ x: 0, y: 0, initialX: 0, initialY: 0 });
+  const dragSelectionIds = useRef<string[]>([]);
+  const dragInitialPositions = useRef<Record<string, { x: number; y: number }>>({});
   const groupDragStart = useRef<Record<string, { x: number; y: number }>>({});
   const pendingDragPositions = useRef<Record<string, { x: number; y: number }>>({});
   const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -241,6 +273,15 @@ export function Editor() {
   const [canvasSrc, setCanvasSrc] = useState<string>('');
   const [canvasSize, setCanvasSize] = useState<{ width: number; height: number } | null>(null);
   const [rulerOrigin, setRulerOrigin] = useState({ x: 20, y: 20 });
+
+  const gridMode: 'off' | 'full' | 'outline' = showGrid ? (gridOutlineOnly ? 'outline' : 'full') : 'off';
+  const setGridMode = (mode: 'off' | 'full' | 'outline') => {
+    setShowGrid(mode !== 'off');
+    setGridOutlineOnly(mode === 'outline');
+  };
+  const cycleGridMode = () => {
+    setGridMode(gridMode === 'off' ? 'full' : gridMode === 'full' ? 'outline' : 'off');
+  };
 
   const createHistorySnapshot = (): EditorHistorySnapshot => ({
     numberItems: numberItems.map((item) => ({ ...item })),
@@ -306,16 +347,20 @@ export function Editor() {
   React.useEffect(() => {
     const openShortcuts = () => setShowShortcutsDialog(true);
     const resetLayout = () => resetWorkspaceLayout();
-    const toggleGridMenu = () => setShowGridMenu((open) => !open);
+    const setGridMenuOpen = (event: Event) => setShowGridMenu(Boolean((event as CustomEvent<boolean>).detail));
     window.addEventListener('recipta:show-shortcuts', openShortcuts);
     window.addEventListener('recipta:reset-layout', resetLayout);
-    window.addEventListener('recipta:toggle-grid-menu', toggleGridMenu);
+    window.addEventListener('recipta:grid-menu-open-change', setGridMenuOpen);
     return () => {
       window.removeEventListener('recipta:show-shortcuts', openShortcuts);
       window.removeEventListener('recipta:reset-layout', resetLayout);
-      window.removeEventListener('recipta:toggle-grid-menu', toggleGridMenu);
+      window.removeEventListener('recipta:grid-menu-open-change', setGridMenuOpen);
     };
   }, []);
+
+  React.useEffect(() => {
+    window.dispatchEvent(new CustomEvent('recipta:grid-menu-open-change', { detail: showGridMenu }));
+  }, [showGridMenu]);
 
   React.useEffect(() => {
     localStorage.setItem(WORKSPACE_LAYOUT_KEY, JSON.stringify({
@@ -503,11 +548,32 @@ export function Editor() {
       duplicateNumberPosition(index, { x: e.clientX, y: e.clientY });
       return;
     }
-    captureUndoState();
-    setSelectedIndex(index);
-    setDraggingIdx(index);
+    const isToggleSelect = e.ctrlKey || e.metaKey || e.shiftKey;
     const item = numberItems[index];
-    setSelectedLayerIds([item.id]);
+    if (isToggleSelect) {
+      const nextSelection = selectedLayerIds.includes(item.id)
+        ? selectedLayerIds.filter((id) => id !== item.id)
+        : [...selectedLayerIds, item.id];
+      setSelectedIndex(nextSelection.length ? numberItems.findIndex((entry) => entry.id === nextSelection[0]) : index);
+      setSelectedLayerIds(nextSelection.length ? nextSelection : [item.id]);
+      setActiveGroupId(null);
+      setSelectedPatternPositionIds([]);
+      setSelectedConnection(null);
+      setDraggingIdx(null);
+      dragSelectionIds.current = [];
+      dragInitialPositions.current = {};
+      return;
+    }
+    captureUndoState();
+    const nextSelection = selectedLayerIds.includes(item.id) ? selectedLayerIds : [item.id];
+    setSelectedIndex(index);
+    setSelectedLayerIds(nextSelection);
+    setDraggingIdx(index);
+    dragSelectionIds.current = nextSelection;
+    dragInitialPositions.current = Object.fromEntries(nextSelection.map((id) => {
+      const selectedItem = numberItems.find((entry) => entry.id === id);
+      return [id, { x: selectedItem?.x ?? item.x, y: selectedItem?.y ?? item.y }];
+    }));
     dragStart.current = {
       x: e.clientX,
       y: e.clientY,
@@ -517,20 +583,92 @@ export function Editor() {
     pendingDragPositions.current = {};
   };
 
+  const getCanvasPoint = (clientX: number, clientY: number) => {
+    if (!canvasContainerRef.current) return null;
+    const rect = canvasContainerRef.current.getBoundingClientRect();
+    const zoomScale = previewZoom / 100;
+    return {
+      x: (clientX - rect.left) / zoomScale,
+      y: (clientY - rect.top) / zoomScale,
+    };
+  };
+
+  const shouldStartMarqueeSelection = (target: EventTarget | null) => {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.closest('[data-number-item-id]')) return false;
+    if (target.closest('.manual-guide')) return false;
+    if (target.closest('.number-connection-handle')) return false;
+    if (target.closest('.canvas-ruler')) return false;
+    if (target.closest('.sheet-preview-nav')) return false;
+    return Boolean(target.closest('.canvas-marquee-surface'));
+  };
+
+  const beginMarqueeSelection = (event: React.MouseEvent) => {
+    if (event.button !== 0 || panMode || spacePressed || isPanning) return;
+    if (!shouldStartMarqueeSelection(event.target)) return;
+    const point = getCanvasPoint(event.clientX, event.clientY);
+    if (!point) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDraggingIdx(null);
+    setDraggingGuide(null);
+    setConnectionDrag(null);
+    pendingConnectionPoint.current = null;
+    setMarqueeSelection({
+      startX: point.x,
+      startY: point.y,
+      endX: point.x,
+      endY: point.y,
+      additive: event.shiftKey || event.metaKey || event.ctrlKey,
+    });
+  };
+
+  const finalizeMarqueeSelection = () => {
+    if (!marqueeSelection) return;
+    const left = Math.min(marqueeSelection.startX, marqueeSelection.endX);
+    const right = Math.max(marqueeSelection.startX, marqueeSelection.endX);
+    const top = Math.min(marqueeSelection.startY, marqueeSelection.endY);
+    const bottom = Math.max(marqueeSelection.startY, marqueeSelection.endY);
+    // Use the item center for marquee selection so partially covered boxes
+    // are not accidentally included.
+    const selectedIds = numberItems.filter((item) => {
+      const centerX = item.x + (item.width / 2);
+      const centerY = item.y + (item.height / 2);
+      return centerX >= left && centerX <= right && centerY >= top && centerY <= bottom;
+    }).map((item) => item.id);
+    const nextIds = marqueeSelection.additive
+      ? Array.from(new Set([...selectedLayerIds, ...selectedIds]))
+      : selectedIds;
+    setSelectedLayerIds(nextIds);
+    if (nextIds.length > 0) {
+      const firstIndex = numberItems.findIndex((item) => item.id === nextIds[0]);
+      if (firstIndex >= 0) setSelectedIndex(firstIndex);
+    }
+    setSelectedPatternPositionIds([]);
+    setSelectedConnection(null);
+    setActiveGroupId(null);
+    setMarqueeSelection(null);
+  };
+
   const updateDraggedNumber = (clientX: number, clientY: number) => {
     if (draggingIdx === null) return;
     const zoomScale = previewZoom / 100;
     const dx = (clientX - dragStart.current.x) / zoomScale;
     const dy = (clientY - dragStart.current.y) / zoomScale;
-    let newX = Math.max(0, dragStart.current.initialX + dx);
-    let newY = Math.max(0, dragStart.current.initialY + dy);
-    if (snapToGrid) {
-      newX = Math.round(newX / gridX) * gridX;
-      newY = Math.round(newY / gridY) * gridY;
-    }
-    const draggedItem = numberItems[draggingIdx];
-    if (!draggedItem) return;
-    const positions: Record<string, { x: number; y: number }> = { [draggedItem.id]: { x: newX, y: newY } };
+    const positions: Record<string, { x: number; y: number }> = {};
+    const ids = dragSelectionIds.current.length ? dragSelectionIds.current : [numberItems[draggingIdx]?.id].filter(Boolean) as string[];
+    ids.forEach((id) => {
+      const start = dragInitialPositions.current[id];
+      if (!start) return;
+      let newX = Math.max(0, start.x + dx);
+      let newY = Math.max(0, start.y + dy);
+      if (snapToGrid) {
+        newX = Math.round(newX / gridX) * gridX;
+        newY = Math.round(newY / gridY) * gridY;
+      }
+      positions[id] = { x: newX, y: newY };
+    });
+    if (!Object.keys(positions).length) return;
     pendingDragPositions.current = positions;
     Object.entries(positions).forEach(([itemId, position]) => {
       const element = canvasContainerRef.current?.querySelector<HTMLElement>(`[data-number-item-id="${CSS.escape(itemId)}"]`);
@@ -542,6 +680,13 @@ export function Editor() {
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (marqueeSelection) {
+      const point = getCanvasPoint(e.clientX, e.clientY);
+      if (point) {
+        setMarqueeSelection((current) => current ? { ...current, endX: point.x, endY: point.y } : null);
+      }
+      return;
+    }
     if (connectionDrag && canvasContainerRef.current) {
       const rect = canvasContainerRef.current.getBoundingClientRect();
       const zoomScale = previewZoom / 100;
@@ -594,6 +739,10 @@ export function Editor() {
   };
 
   const handleMouseUp = (event: React.MouseEvent) => {
+    if (marqueeSelection) {
+      finalizeMarqueeSelection();
+      return;
+    }
     if (connectionDrag) {
       const element = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
       const targetBox = element?.closest<HTMLElement>('[data-number-item-id]');
@@ -614,6 +763,8 @@ export function Editor() {
         setNumberItems((items) => items.map((item) => committedPositions[item.id] ? { ...item, ...committedPositions[item.id] } : item));
       }
       pendingDragPositions.current = {};
+      dragSelectionIds.current = [];
+      dragInitialPositions.current = {};
     }
     setDraggingIdx(null);
     if (draggingGuide) {
@@ -676,13 +827,14 @@ export function Editor() {
     const nextIdx = numberItems.length;
     const targetGroup = layerGroups.find((group) => group.id === activeGroupId) || null;
     const targetSettings = targetGroup ? groupSequenceSettings[targetGroup.id] || numberSettings : numberSettings;
+    const nextPosition = getNextReadableNumberItemPosition(numberItems, canvasSize?.height);
     const newItem: NumberItem = {
       id: `ni_${Date.now()}_${nextIdx}`,
       projectId: activeProject.id,
       itemIndex: nextIdx,
       numberValue: getSampleNumberValue(targetSettings),
-      x: 250 + nextIdx * 20,
-      y: 120 + nextIdx * 20,
+      x: nextPosition.x,
+      y: nextPosition.y,
       width: 140,
       height: 30,
       rotation: 0,
@@ -731,18 +883,39 @@ export function Editor() {
       return;
     }
 
-    const lastItem = numberItems[numberItems.length - 1];
     const timestamp = Date.now();
-    const additions = Array.from({ length: targetCount - currentGroupKeys.length }, (_, offset) => {
+    const additions: NumberItem[] = [];
+    for (let offset = 0; offset < targetCount - currentGroupKeys.length; offset += 1) {
       const itemIndex = numberItems.length + offset;
-      return {
-        ...lastItem,
+      const nextPosition = getNextReadableNumberItemPosition([...numberItems, ...additions], canvasSize?.height);
+      additions.push({
+        ...(numberItems[numberItems.length - 1] || {
+          id: `ni_${timestamp}_${itemIndex}`,
+          projectId: activeProject.id,
+          itemIndex,
+          numberValue: getSampleNumberValue(numberSettings),
+          x: DEFAULT_NUMBER_ITEM_X,
+          y: DEFAULT_NUMBER_ITEM_Y,
+          width: 140,
+          height: 30,
+          rotation: 0,
+          fontFamily: 'Inter',
+          fontSize: 16,
+          fontStyle: 'bold',
+          fontColor: '#111827',
+          letterSpacing: 0,
+          alignment: 'left',
+          isVisible: true,
+          isLocked: false,
+          isOverride: false,
+          overrideJson: '{}',
+        }),
         id: `ni_${timestamp}_${itemIndex}`,
         itemIndex,
-        x: Math.max(0, lastItem.x),
-        y: Math.max(0, lastItem.y + ((offset + 1) * Math.max(lastItem.height + 32, 70))),
-      };
-    });
+        x: nextPosition.x,
+        y: nextPosition.y,
+      });
+    }
     setNumberItems((items) => [...items, ...additions]);
     setPatternGroups((groups) => ({ ...groups, ...Object.fromEntries(additions.map((item, offset) => [item.id, `receipt_${timestamp}_${currentGroupKeys.length + offset + 1}`])) }));
     setPatternDefinitions((definitions) => [
@@ -1169,7 +1342,9 @@ export function Editor() {
       if (modifier && event.key === '-') { event.preventDefault(); changeZoom(previewZoom - 10); return; }
       if (key === 'n' && event.shiftKey && !modifier) { event.preventDefault(); handleAddNumberItem(); return; }
       if (key === 'r' && !modifier) { event.preventDefault(); rotateSelectedNumbers(event.shiftKey ? -90 : 90); return; }
-      if (modifier && (key === "'" || key === '’')) { event.preventDefault(); setShowGrid((visible) => !visible); return; }
+       if (modifier && event.altKey && key === 'g' && event.shiftKey) { event.preventDefault(); setGridMode('outline'); return; }
+       if (modifier && event.altKey && key === 'g') { event.preventDefault(); setGridMode('full'); return; }
+       if (modifier && (key === "'" || key === '’')) { event.preventDefault(); cycleGridMode(); return; }
       if ((event.key === 'Delete' || event.key === 'Backspace') && numberItems.length > 1) { event.preventDefault(); handleRemoveNumberItem(selectedIndex); return; }
       const distance = event.shiftKey ? 10 : 1;
       if (event.key === 'ArrowLeft') { event.preventDefault(); nudgeSelectedNumbers(-distance, 0); }
@@ -1348,17 +1523,25 @@ export function Editor() {
         </button>
         <div className="header-grid-menu" ref={gridMenuRef}>
           <button
+            type="button"
             className={`btn btn-ghost btn-sm editor-grid-trigger ${(showGrid || showGridMenu) ? 'toolbar-control-active' : ''}`}
             onClick={() => setShowGridMenu((open) => !open)}
             aria-expanded={showGridMenu}
             aria-haspopup="dialog"
             title="Grid, snapping, and ruler guide settings"
           >
-            ▦ Grid {showGrid ? 'On' : 'Off'} {showGridMenu ? '⌃' : '⌄'}
+            ▦ Grid {gridMode === 'off' ? 'Off' : gridMode === 'outline' ? 'Outline' : 'Full'} {showGridMenu ? '⌃' : '⌄'}
           </button>
           {showGridMenu && <div className="header-grid-dropdown" role="dialog" aria-label="Grid settings">
             <div className="header-grid-dropdown-title"><span>Grid &amp; Guides</span><button onClick={() => setShowGridMenu(false)} aria-label="Close grid settings">×</button></div>
-            <label className="header-grid-toggle"><span>Show grid lines</span><input type="checkbox" checked={showGrid} onChange={(event) => setShowGrid(event.target.checked)} /></label>
+            <div className="header-grid-mode-row">
+              <span>Grid mode</span>
+              <div className="header-grid-mode-group" role="radiogroup" aria-label="Grid mode">
+                <button type="button" className={gridMode === 'off' ? 'active' : ''} onClick={() => setGridMode('off')}>Off</button>
+                <button type="button" className={gridMode === 'full' ? 'active' : ''} onClick={() => setGridMode('full')}>Full grid</button>
+                <button type="button" className={gridMode === 'outline' ? 'active' : ''} onClick={() => setGridMode('outline')}>Outline</button>
+              </div>
+            </div>
             <label className="header-grid-toggle"><span>Snap positions</span><input type="checkbox" checked={snapToGrid} onChange={(event) => setSnapToGrid(event.target.checked)} /></label>
             <div className="header-grid-fields"><label><span>Horizontal</span><input type="number" min="2" max="500" value={gridX} onChange={(event) => setGridX(Math.max(2, Number(event.target.value) || 2))} /></label><label><span>Vertical</span><input type="number" min="2" max="500" value={gridY} onChange={(event) => setGridY(Math.max(2, Number(event.target.value) || 2))} /></label></div>
             <div className="header-grid-margin-fields">
@@ -1366,8 +1549,8 @@ export function Editor() {
               {(['top', 'right', 'bottom', 'left'] as const).map((side) => <label key={side}><span>{side}</span><input type="number" min="0" max="100" step="0.5" value={gridMargins[side]} onChange={(event) => setGridMargins((margins) => ({ ...margins, [side]: Math.max(0, Number(event.target.value) || 0) }))} /></label>)}
             </div>
             <label className="header-grid-opacity"><span>Opacity <b>{gridOpacity}%</b></span><input type="range" min="10" max="90" step="5" value={gridOpacity} onChange={(event) => setGridOpacity(Number(event.target.value))} /></label>
-            <div className="header-guide-summary"><span>Ruler guides: {verticalGuides.length + horizontalGuides.length}</span>{(verticalGuides.length > 0 || horizontalGuides.length > 0) && <button onClick={() => { setVerticalGuides([]); setHorizontalGuides([]); }}>Clear guides</button>}</div>
-            <small>Drag from the top or left ruler to create a guide. Click the ruler corner to toggle the grid.</small>
+            <div className="header-guide-summary"><span>Ruler guides: {verticalGuides.length + horizontalGuides.length}</span>{(verticalGuides.length > 0 || horizontalGuides.length > 0) && <button type="button" onClick={() => { setVerticalGuides([]); setHorizontalGuides([]); }}>Clear guides</button>}</div>
+            <small>Drag from the top or left ruler to create a guide. Click the ruler corner or use shortcuts to switch grid mode.</small>
           </div>}
         </div>
 
@@ -1414,7 +1597,7 @@ export function Editor() {
               <section><h3>History</h3><div><span>Undo</span><kbd>Ctrl/⌘ Z</kbd></div><div><span>Redo</span><kbd>Ctrl/⌘ Shift Z</kbd></div><div><span>Redo alternative</span><kbd>Ctrl/⌘ Y</kbd></div></section>
               <section><h3>Number layers</h3><div><span>Add number position</span><kbd>Shift N</kbd></div><div><span>Duplicate linked text</span><kbd>Ctrl/⌘ J</kbd></div><div><span>Duplicate by dragging</span><kbd>Alt/⌥ + Drag</kbd></div><div><span>Delete selected</span><kbd>Delete</kbd></div><div><span>Group layers</span><kbd>Ctrl/⌘ G</kbd></div><div><span>Ungroup</span><kbd>Ctrl/⌘ Shift G</kbd></div></section>
               <section><h3>Tools &amp; position</h3><div><span>Select / Move tool</span><kbd>V</kbd></div><div><span>Hand / Pan tool</span><kbd>H</kbd></div><div><span>Temporary Hand tool</span><kbd>Hold Space</kbd></div><div><span>Rotate 90° clockwise</span><kbd>R</kbd></div><div><span>Rotate 90° counter-clockwise</span><kbd>Shift R</kbd></div><div><span>Nudge 1 px</span><kbd>Arrow keys</kbd></div><div><span>Nudge 10 px</span><kbd>Shift + Arrow</kbd></div></section>
-              <section><h3>View &amp; output</h3><div><span>Full screen mode</span><kbd>F</kbd></div><div><span>Hide/show panels</span><kbd>Tab</kbd></div><div><span>Collapse left panel</span><kbd>[</kbd></div><div><span>Collapse right panel</span><kbd>]</kbd></div><div><span>Toggle grid</span><kbd>Ctrl/⌘ '</kbd></div><div><span>Zoom in</span><kbd>Ctrl/⌘ +</kbd></div><div><span>Zoom out</span><kbd>Ctrl/⌘ −</kbd></div><div><span>Export PDF</span><kbd>Ctrl/⌘ Alt/⌥ Shift W</kbd></div></section>
+               <section><h3>View &amp; output</h3><div><span>Full screen mode</span><kbd>F</kbd></div><div><span>Hide/show panels</span><kbd>Tab</kbd></div><div><span>Collapse left panel</span><kbd>[</kbd></div><div><span>Collapse right panel</span><kbd>]</kbd></div><div><span>Toggle grid mode</span><kbd>Ctrl/⌘ '</kbd></div><div><span>Full grid</span><kbd>Ctrl/⌘ Alt G</kbd></div><div><span>Outline grid</span><kbd>Ctrl/⌘ Alt Shift G</kbd></div><div><span>Zoom in</span><kbd>Ctrl/⌘ +</kbd></div><div><span>Zoom out</span><kbd>Ctrl/⌘ −</kbd></div><div><span>Export PDF</span><kbd>Ctrl/⌘ Alt/⌥ Shift W</kbd></div></section>
               <section><h3>Workspace</h3><div><span>Lock/unlock layout</span><kbd>Ctrl/⌘ Shift L</kbd></div><div><span>Reset panel layout</span><kbd>Ctrl/⌘ Shift R</kbd></div><div><span>Resize panels</span><kbd>Drag divider</kbd></div></section>
               <section><h3>General</h3><div><span>Close / clear selection</span><kbd>Esc</kbd></div><div><span>Show shortcuts</span><kbd>?</kbd></div></section>
             </div>
@@ -1487,131 +1670,6 @@ export function Editor() {
                 <span>1│101│201</span><strong>Cut &amp; stack</strong><small>One range per position</small>
               </button>
             </div>
-            <button className={`connection-editor-toggle ${showAdvancedFlow ? 'active' : ''}`} onClick={() => setShowAdvancedFlow((visible) => !visible)} aria-expanded={showAdvancedFlow}>
-              <span>⚙</span><span><strong>{showAdvancedFlow ? 'Hide advanced flow options' : 'Advanced flow options'}</strong><small>Copies, direction, ranges and connections</small></span><b>{showAdvancedFlow ? '▴' : '▾'}</b>
-            </button>
-            {showAdvancedFlow && <>
-            {(primaryFlowMode === 'across-sheet' || primaryFlowMode === 'cut-stack') && (
-              <button className={`linked-copies-toggle ${linkedCopiesEnabled ? 'active' : ''}`} onClick={toggleLinkedCopies} role="switch" aria-checked={linkedCopiesEnabled}>
-                <span className="linked-copies-switch"><i /></span>
-                <span><strong>Linked copies</strong><small>Use matching numbers in duplicated positions</small></span>
-              </button>
-            )}
-            {linkedCopiesEnabled && <div className="linked-cut-stack-preset">
-              <div><strong>3 paired receipts</strong><small>1 ↔ 4 &nbsp;·&nbsp; 2 ↔ 5 &nbsp;·&nbsp; 3 ↔ 6</small></div>
-              <div className="linked-preset-actions"><button onClick={() => applyThreePairLinkedPreset('linked-across-sheet')} disabled={numberItems.length < 6}>Across: 1 · 2 · 3</button><button onClick={() => applyThreePairLinkedPreset('linked-cut-stack')} disabled={numberItems.length < 6}>Cut-stack: 1 · 35 · 69</button></div>
-              {numberItems.length < 6 && <span>Add or duplicate until there are 6 number layers.</span>}
-            </div>}
-            {linkedCopiesEnabled && (
-              <div className="linked-details-controls">
-                <button className={`connection-editor-toggle ${showConnectionEditor ? 'active' : ''}`} onClick={() => setShowConnectionEditor((visible) => !visible)}>
-                  <span>⌁</span><span><strong>{showConnectionEditor ? 'Hide connections' : 'Edit connections'}</strong><small>Advanced matching, names and flow arrows</small></span><b>{showConnectionEditor ? '▴' : '▾'}</b>
-                </button>
-                <button className={`link-summary-toggle ${showLinkSummary ? 'active' : ''}`} onClick={() => setShowLinkSummary((visible) => !visible)}>
-                  <span>☷</span><span><strong>{showLinkSummary ? 'Hide Link Summary' : 'View Link Summary'}</strong><small>{numberItems.length} positions in {uniquePatternKeys.length} groups</small></span><b>{showLinkSummary ? '▴' : '▾'}</b>
-                </button>
-              </div>
-            )}
-            {(primaryFlowMode === 'cut-stack') && <div className="three-up-preset">
-              <div><span>3-UP</span><p><strong>Receipt Cut &amp; Stack</strong><small>Creates 0001 · 0035 · 0069 for a 1–100 sequence.</small></p></div>
-              <button onClick={applyThreeUpCutStackPreset} disabled={numberItems.length < 3}>{numberItems.length > 3 ? `Apply & remove ${numberItems.length - 3} extra` : 'Apply setup'}</button>
-            </div>}
-            {numberArrangement === 'same-number' && (
-              <div className="linked-number-notice">
-                <span>⌁</span>
-                <div><strong>Positions are linked</strong><small>Every position prints the same number. The sequence advances once per sheet.</small></div>
-              </div>
-            )}
-            {(numberArrangement === 'custom-pattern' || (linkedCopiesEnabled && showConnectionEditor)) && (
-              <div className="custom-pattern-editor">
-                <div className="custom-pattern-help"><strong>Connection patterns</strong><small>Rename, add, remove, and assign any number position.</small></div>
-                <div className="pattern-definition-list">
-                  {patternDefinitions.map((definition) => (
-                    <div key={definition.id} className="pattern-definition-row">
-                      <span className="pattern-color" style={{ background: definition.color }} />
-                      <input
-                        value={definition.name}
-                        onChange={(event) => setPatternDefinitions((definitions) => definitions.map((entry) => entry.id === definition.id ? { ...entry, name: event.target.value } : entry))}
-                        aria-label="Pattern name"
-                      />
-                      <button onClick={() => removePatternDefinition(definition.id)} disabled={patternDefinitions.length <= 1} title="Remove pattern">×</button>
-                    </div>
-                  ))}
-                  <button className="add-pattern-button" onClick={addPatternDefinition}>+ Add connection pattern</button>
-                </div>
-                <div className="pattern-assignment-title">Position connections</div>
-                {numberItems.map((item, index) => (
-                  <label key={item.id}>
-                    <span>Position {index + 1}</span>
-                    <select
-                      value={patternGroups[item.id] || String(index + 1)}
-                      onChange={(event) => { setPatternGroups((groups) => ({ ...groups, [item.id]: event.target.value })); setPreviewSheet(0); }}
-                    >
-                      {patternDefinitions.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}
-                    </select>
-                  </label>
-                ))}
-                <div className="drag-connection-help"><span>↗</span><div><strong>Drag to connect</strong><small>Select a number box, then drag its round connection handle onto another box.</small></div></div>
-                {selectedConnection && (
-                  <div className="selected-connection-actions">
-                    <span>Selected: Position {numberItems.findIndex((item) => item.id === selectedConnection.fromId) + 1} → {numberItems.findIndex((item) => item.id === selectedConnection.toId) + 1}</span>
-                    <div><button onClick={reverseSelectedConnection}>⇄ Reverse flow</button><button className="danger" onClick={deleteSelectedConnection}>× Delete arrow</button></div>
-                  </div>
-                )}
-                <div className="custom-pattern-example">Sheet {safePreviewSheet + 1}: {previewSheetNumbers.filter(Boolean).join(' · ') || 'No numbers'}</div>
-              </div>
-            )}
-            {(numberArrangement === 'cut-stack' || (linkedCopiesEnabled && showLinkSummary)) && (
-              <div className="cut-stack-ranges">
-                {positionRanges.map((range, index) => <div key={numberItems[index].id}><span>Position {index + 1}</span><strong>{range}</strong></div>)}
-              </div>
-            )}
-            <div className="flow-field">
-              <span>Fill direction</span>
-              <div className="flow-direction-menu">
-                {([
-                  ['top-bottom', '↓', 'Top to bottom'],
-                  ['bottom-top', '↑', 'Bottom to top'],
-                  ['left-right', '→', 'Left to right'],
-                  ['right-left', '←', 'Right to left'],
-                  ['custom', '☷', 'Custom layer order'],
-                ] as const).map(([value, icon, label]) => (
-                  <button key={value} className={flowDirection === value ? 'active' : ''} onClick={() => applyNumberFlowOrder(value)}>
-                    <span>{icon}</span><strong>{label}</strong>{flowDirection === value && <b>✓</b>}
-                  </button>
-                ))}
-              </div>
-              {numberItems.length < 2 && <small className="flow-direction-hint">Add another number position to activate direction ordering.</small>}
-            </div>
-            {(numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && <label className="grid-toggle-row flow-toggle-row">
-              <span>Show connection arrows</span>
-              <span className="toggle-switch"><input type="checkbox" checked={showNumberFlow} onChange={(event) => setShowNumberFlow(event.target.checked)} /><span className="toggle-switch-track"><span /></span></span>
-            </label>}
-            <div className="flow-route">
-              {numberItems.map((item, index) => (
-                <React.Fragment key={item.id}>
-                  <button
-                    onClick={() => {
-                      if (numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') togglePatternPositionSelection(item.id);
-                      else { setSelectedIndex(index); setSelectedLayerIds([item.id]); setActiveGroupId(null); }
-                    }}
-                    className={`${selectedIndex === index && numberArrangement !== 'custom-pattern' && numberArrangement !== 'linked-cut-stack' && numberArrangement !== 'linked-across-sheet' ? 'active' : ''} ${selectedPatternPositionIds.includes(item.id) ? 'pattern-selected' : ''}`}
-                    title={numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet' ? `Select position ${index + 1} for same-number grouping` : `Position ${index + 1}`}
-                  >{index + 1}</button>
-                  {index < numberItems.length - 1 && <span>→</span>}
-                </React.Fragment>
-              ))}
-              <span className="flow-next-sheet">Next sheet</span>
-            </div>
-            {(numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && (
-              <div className="quick-pattern-grouping">
-                <span>{selectedPatternPositionIds.length ? `${selectedPatternPositionIds.length} positions selected` : 'Select two or more position boxes above'}</span>
-                <button onClick={groupSelectedPatternPositions} disabled={selectedPatternPositionIds.length < 2}>⌁ Group as Same Number</button>
-                {selectedPatternPositionIds.length > 0 && <button className="clear" onClick={() => setSelectedPatternPositionIds([])}>Clear selection</button>}
-              </div>
-            )}
-            <div className="flow-summary">Sheet {safePreviewSheet + 1}: <strong>{previewSheetNumbers.filter(Boolean).join(' · ') || 'No numbers'}</strong></div>
-            </>}
           </div>, numberFlowTarget)}
 
           <div className="panel-section imported-template-panel">
@@ -1764,6 +1822,18 @@ export function Editor() {
                   style={{
                     opacity: gridOpacity / 100,
                     backgroundSize: `${gridX}px ${gridY}px`,
+                    backgroundPosition: `${-Math.round(rulerOrigin.x % gridX)}px ${-Math.round(rulerOrigin.y % gridY)}px`,
+                    backgroundImage: gridOutlineOnly ? 'none' : undefined,
+                  }}
+                  aria-hidden="true"
+                />
+              )}
+
+              {canvasSrc && showGrid && gridOutlineOnly && (
+                <div
+                  className="canvas-grid-outline-only"
+                  style={{
+                    inset: `${Math.max(0, gridMargins.top) * PIXELS_PER_MM}px ${Math.max(0, gridMargins.right) * PIXELS_PER_MM}px ${Math.max(0, gridMargins.bottom) * PIXELS_PER_MM}px ${Math.max(0, gridMargins.left) * PIXELS_PER_MM}px`,
                   }}
                   aria-hidden="true"
                 />
@@ -1781,6 +1851,8 @@ export function Editor() {
                   aria-label="Document margins"
                 />
               )}
+
+              <div className="canvas-marquee-surface" onMouseDown={beginMarqueeSelection} aria-hidden="true" />
 
               {canvasSrc && showNumberFlow && (numberArrangement === 'custom-pattern' || numberArrangement === 'linked-cut-stack' || numberArrangement === 'linked-across-sheet') && (
                 <svg className="number-flow-overlay custom-pattern-connections" width="100%" height="100%" viewBox={`0 0 ${canvasSize?.width || 1} ${canvasSize?.height || 1}`} aria-hidden="true">
@@ -1838,9 +1910,28 @@ export function Editor() {
                 </div>
               ))}
 
+              {marqueeSelection && (
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    left: `${Math.min(marqueeSelection.startX, marqueeSelection.endX)}px`,
+                    top: `${Math.min(marqueeSelection.startY, marqueeSelection.endY)}px`,
+                    width: `${Math.abs(marqueeSelection.endX - marqueeSelection.startX)}px`,
+                    height: `${Math.abs(marqueeSelection.endY - marqueeSelection.startY)}px`,
+                    border: '1px solid rgba(138, 182, 209, 0.95)',
+                    background: 'rgba(138, 182, 209, 0.16)',
+                    boxShadow: '0 0 0 1px rgba(138, 182, 209, 0.22) inset',
+                    pointerEvents: 'none',
+                    zIndex: 25,
+                  }}
+                />
+              )}
+
               {/* Render ALL Number Overlay Positions on Canvas */}
               {numberItems.map((item, idx) => {
-                const isSelected = selectedIndex === idx;
+                const isSelected = selectedLayerIds.includes(item.id);
+                const isPrimarySelection = selectedIndex === idx;
                 const isCurrentlyDragging = draggingIdx === idx;
                 const displayVal = previewSheetNumbers[idx] || '';
                 const rot = item.rotation ?? 0;
@@ -1873,7 +1964,7 @@ export function Editor() {
                       color: item.fontColor || '#111827',
                       textAlign: (item.alignment as any) || 'left',
                       whiteSpace: 'nowrap',
-                      zIndex: isSelected ? 20 : 10,
+                      zIndex: isPrimarySelection ? 21 : isSelected ? 20 : 10,
                       transition: isCurrentlyDragging ? 'none' : 'transform 0.15s ease, border-color 0.15s ease',
                     }}
                   >
@@ -1885,7 +1976,7 @@ export function Editor() {
                         left: '0',
                         fontSize: '9px',
                         fontFamily: 'sans-serif',
-                        background: isSelected ? 'var(--color-accent)' : '#3f3f3f',
+                        background: isPrimarySelection ? 'var(--color-accent)' : isSelected ? '#5a7ea3' : '#3f3f3f',
                         color: '#fff',
                         padding: '1px 5px',
                         borderRadius: '2px',

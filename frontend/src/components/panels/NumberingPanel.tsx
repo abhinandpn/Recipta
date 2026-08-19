@@ -73,6 +73,7 @@ export function NumberingPanel({
   const [showAffixes, setShowAffixes] = useState(Boolean(sequenceSettings?.prefix || sequenceSettings?.suffix));
   const [typographyExpanded, setTypographyExpanded] = useState(false);
   const [fontMenuOpen, setFontMenuOpen] = useState(false);
+  const [toolbarFontMenuOpen, setToolbarFontMenuOpen] = useState(false);
   const [positionMenu, setPositionMenu] = useState<{ index: number; x: number; y: number } | null>(null);
   const fontMenuRef = React.useRef<HTMLDivElement>(null);
 
@@ -177,6 +178,14 @@ export function NumberingPanel({
     window.addEventListener('mousedown', closeMenu);
     return () => window.removeEventListener('mousedown', closeMenu);
   }, [positionMenu]);
+
+  useEffect(() => {
+    const handleToolbarFontMenuOpenChange = (event: Event) => {
+      setToolbarFontMenuOpen(Boolean((event as CustomEvent<boolean>).detail));
+    };
+    window.addEventListener('recipta:font-menu-open-change', handleToolbarFontMenuOpenChange);
+    return () => window.removeEventListener('recipta:font-menu-open-change', handleToolbarFontMenuOpenChange);
+  }, []);
 
   useEffect(() => {
     const toggleTypography = () => setTypographyExpanded((expanded) => {
@@ -338,101 +347,119 @@ export function NumberingPanel({
       </div>
 
       {/* Style & Typography for Active Item */}
-      <div className={`panel-section collapsible-panel-section ${typographyExpanded ? 'expanded' : 'collapsed'}`}>
-        <button
-          className="panel-collapsible-heading"
-          onClick={() => {
-            setTypographyExpanded((expanded) => !expanded);
-            if (typographyExpanded) setFontMenuOpen(false);
-          }}
-          aria-expanded={typographyExpanded}
-        >
-          <span className="panel-section-title">Font &amp; Typography (#{selectedIndex + 1})</span>
-          <span className="panel-collapse-icon" aria-hidden="true">{typographyExpanded ? '−' : '+'}</span>
-        </button>
-
-        {typographyExpanded && <div className="panel-collapsible-content">
-
-        <div className="panel-row">
-          <span className="panel-label">Font</span>
-          <div className="font-picker" ref={fontMenuRef}>
-            <button className="font-picker-trigger" onClick={() => setFontMenuOpen((open) => !open)} aria-expanded={fontMenuOpen} aria-haspopup="listbox">
-              <span>{fontFamily}</span><strong style={{ fontFamily }}>Aa 123</strong><i>{fontMenuOpen ? '▴' : '▾'}</i>
-            </button>
-            {fontMenuOpen && (
-              <div className="font-picker-menu" role="listbox" aria-label="Choose font">
-                {BASIC_FONTS.map((font) => (
-                  <button key={font} className={fontFamily === font ? 'selected' : ''} onClick={() => { setFontFamily(font); setFontMenuOpen(false); }} role="option" aria-selected={fontFamily === font}>
-                    <span><b>{fontFamily === font ? '✓' : ''}</b>{font}</span>
-                    <strong style={{ fontFamily: font }}>Aa 123</strong>
-                  </button>
-                ))}
+      {toolbarFontMenuOpen && document.getElementById('toolbar-font-panel-target') ? createPortal((
+        <div className="panel-section collapsible-panel-section expanded">
+          <div className="panel-collapsible-content">
+            <div className="panel-row">
+              <span className="panel-label">Font</span>
+              <div className="font-picker" ref={fontMenuRef}>
+                <button type="button" className="font-picker-trigger" onClick={() => setFontMenuOpen((open) => !open)} aria-expanded={fontMenuOpen} aria-haspopup="listbox">
+                  <span>{fontFamily}</span><strong style={{ fontFamily }}>Aa 123</strong><i>{fontMenuOpen ? '▴' : '▾'}</i>
+                </button>
+                {fontMenuOpen && (
+                  <div className="font-picker-menu" role="listbox" aria-label="Choose font">
+                    {BASIC_FONTS.map((font) => (
+                      <button type="button" key={font} className={fontFamily === font ? 'selected' : ''} onClick={() => { setFontFamily(font); setFontMenuOpen(false); }} role="option" aria-selected={fontFamily === font}>
+                        <span><b>{fontFamily === font ? '✓' : ''}</b>{font}</span>
+                        <strong style={{ fontFamily: font }}>Aa 123</strong>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+
+            <div className="panel-row">
+              <span className="panel-label">Size</span>
+              <input type="number" className="panel-input-small" min="6" max="120" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} />
+              <span className="panel-label" style={{ minWidth: '45px', textAlign: 'right' }}>Color</span>
+              <input type="color" style={{ width: '32px', height: '26px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} value={fontColor} onChange={(e) => setFontColor(e.target.value)} />
+            </div>
+
+            <div className="panel-row">
+              <span className="panel-label">Style</span>
+              <select className="panel-input" value={fontStyle} onChange={(e) => setFontStyle(e.target.value)}>
+                <option value="normal">Normal</option>
+                <option value="bold">Bold</option>
+                <option value="italic">Italic</option>
+                <option value="bold-italic">Bold Italic</option>
+              </select>
+            </div>
+
+            <div className="panel-row">
+              <span className="panel-label">Align</span>
+              <div className="editor-tab-group" style={{ flex: 1 }}>
+                <button type="button" className={`editor-tab ${alignment === 'left' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('left')}>Left</button>
+                <button type="button" className={`editor-tab ${alignment === 'center' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('center')}>Center</button>
+                <button type="button" className={`editor-tab ${alignment === 'right' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('right')}>Right</button>
+              </div>
+            </div>
           </div>
         </div>
-
-        <div className="panel-row">
-          <span className="panel-label">Size</span>
-          <input
-            type="number"
-            className="panel-input-small"
-            min="6"
-            max="120"
-            value={fontSize}
-            onChange={(e) => setFontSize(Number(e.target.value))}
-          />
-          <span className="panel-label" style={{ minWidth: '45px', textAlign: 'right' }}>Color</span>
-          <input
-            type="color"
-            style={{ width: '32px', height: '26px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }}
-            value={fontColor}
-            onChange={(e) => setFontColor(e.target.value)}
-          />
-        </div>
-
-        <div className="panel-row">
-          <span className="panel-label">Style</span>
-          <select
-            className="panel-input"
-            value={fontStyle}
-            onChange={(e) => setFontStyle(e.target.value)}
+      ), document.getElementById('toolbar-font-panel-target')!) : (
+        <div className={`panel-section collapsible-panel-section ${typographyExpanded ? 'expanded' : 'collapsed'}`}>
+          <button
+            className="panel-collapsible-heading"
+            onClick={() => {
+              setTypographyExpanded((expanded) => !expanded);
+              if (typographyExpanded) setFontMenuOpen(false);
+            }}
+            aria-expanded={typographyExpanded}
           >
-            <option value="normal">Normal</option>
-            <option value="bold">Bold</option>
-            <option value="italic">Italic</option>
-            <option value="bold-italic">Bold Italic</option>
-          </select>
-        </div>
+            <span className="panel-section-title">Font &amp; Typography (#{selectedIndex + 1})</span>
+            <span className="panel-collapse-icon" aria-hidden="true">{typographyExpanded ? '−' : '+'}</span>
+          </button>
 
-        <div className="panel-row">
-          <span className="panel-label">Align</span>
-          <div className="editor-tab-group" style={{ flex: 1 }}>
-            <button
-              className={`editor-tab ${alignment === 'left' ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setAlignment('left')}
-            >
-              Left
-            </button>
-            <button
-              className={`editor-tab ${alignment === 'center' ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setAlignment('center')}
-            >
-              Center
-            </button>
-            <button
-              className={`editor-tab ${alignment === 'right' ? 'active' : ''}`}
-              style={{ flex: 1, padding: '2px 4px' }}
-              onClick={() => setAlignment('right')}
-            >
-              Right
-            </button>
-          </div>
+          {typographyExpanded && (
+            <div className="panel-collapsible-content">
+              <div className="panel-row">
+                <span className="panel-label">Font</span>
+                <div className="font-picker" ref={fontMenuRef}>
+                  <button type="button" className="font-picker-trigger" onClick={() => setFontMenuOpen((open) => !open)} aria-expanded={fontMenuOpen} aria-haspopup="listbox">
+                    <span>{fontFamily}</span><strong style={{ fontFamily }}>Aa 123</strong><i>{fontMenuOpen ? '▴' : '▾'}</i>
+                  </button>
+                  {fontMenuOpen && (
+                    <div className="font-picker-menu" role="listbox" aria-label="Choose font">
+                      {BASIC_FONTS.map((font) => (
+                        <button type="button" key={font} className={fontFamily === font ? 'selected' : ''} onClick={() => { setFontFamily(font); setFontMenuOpen(false); }} role="option" aria-selected={fontFamily === font}>
+                          <span><b>{fontFamily === font ? '✓' : ''}</b>{font}</span>
+                          <strong style={{ fontFamily: font }}>Aa 123</strong>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="panel-row">
+                <span className="panel-label">Size</span>
+                <input type="number" className="panel-input-small" min="6" max="120" value={fontSize} onChange={(e) => setFontSize(Number(e.target.value))} />
+                <span className="panel-label" style={{ minWidth: '45px', textAlign: 'right' }}>Color</span>
+                <input type="color" style={{ width: '32px', height: '26px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} value={fontColor} onChange={(e) => setFontColor(e.target.value)} />
+              </div>
+
+              <div className="panel-row">
+                <span className="panel-label">Style</span>
+                <select className="panel-input" value={fontStyle} onChange={(e) => setFontStyle(e.target.value)}>
+                  <option value="normal">Normal</option>
+                  <option value="bold">Bold</option>
+                  <option value="italic">Italic</option>
+                  <option value="bold-italic">Bold Italic</option>
+                </select>
+              </div>
+
+              <div className="panel-row">
+                <span className="panel-label">Align</span>
+                <div className="editor-tab-group" style={{ flex: 1 }}>
+                  <button type="button" className={`editor-tab ${alignment === 'left' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('left')}>Left</button>
+                  <button type="button" className={`editor-tab ${alignment === 'center' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('center')}>Center</button>
+                  <button type="button" className={`editor-tab ${alignment === 'right' ? 'active' : ''}`} style={{ flex: 1, padding: '2px 4px' }} onClick={() => setAlignment('right')}>Right</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-        </div>}
-      </div>
+      )}
 
     </div>
   );
