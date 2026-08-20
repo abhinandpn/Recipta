@@ -53,6 +53,13 @@
   transform: rotate(-3deg);
 }
 
+.toolbar-brand-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
+
 .toolbar-brand-icon span {
   transform: rotate(3deg);
 }

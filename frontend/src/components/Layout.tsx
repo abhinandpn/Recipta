@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAppStore } from '../store/appStore';
 import { FULLSCREEN_EVENT, getFullscreenState, toggleAppFullscreen } from '../services/fullscreen';
+import appLogo from '../assets/images/app-logo.png';
 import '../styles/components/layout.css';
 
 interface LayoutProps {
@@ -56,8 +57,8 @@ export function Layout({ children }: LayoutProps) {
       {/* Top Toolbar */}
       <header className="app-toolbar">
         <div className="toolbar-brand">
-          <div className="toolbar-brand-icon"><span>Rc</span></div>
-          <div className="toolbar-brand-copy">
+            <div className="toolbar-brand-icon"><img src={appLogo} alt="Recipta logo" /></div>
+            <div className="toolbar-brand-copy">
             <span className="toolbar-brand-name">Recipta</span>
             <span className="toolbar-brand-tagline">Print Workspace</span>
           </div>
