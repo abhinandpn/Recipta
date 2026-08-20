@@ -445,5 +445,5 @@ export async function getAppInfo(): Promise<Record<string, string>> {
     return mainApp.GetAppInfo();
   }
 
-  return { name: 'Recipta (Browser Mode)', version: '0.1.0' };
+  return { name: 'Recipta (Browser Mode)', version: '0.2.0' };
 }

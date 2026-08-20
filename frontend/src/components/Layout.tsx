@@ -159,7 +159,7 @@ export function Layout({ children }: LayoutProps) {
               </button>
             </>
           )}
-          <span className="toolbar-version">v0.1.0</span>
+          <span className="toolbar-version">v0.2.0</span>
           <button type="button" className={`toolbar-fullscreen-button ${isFullscreen ? 'active' : ''}`} onClick={() => void toggleFullscreen()} title="Full screen mode (F)" aria-label={isFullscreen ? 'Exit full screen' : 'Enter full screen'}>
             {isFullscreen ? '↙' : '⛶'}
           </button>
